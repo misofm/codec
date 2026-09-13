@@ -79,3 +79,9 @@ The post-commit final browser record is
 codec commit and decoder hash, with one-worker decode 2,200.9 ms
 (2,181.7–2,239.6), eight-worker makespan 386.2 ms (371.3–397.9), and all
 547,303,704 bytes of indexed PCM verification passing.
+
+## Independent verification and official acceptance
+
+Fresh Astra medium verified the frozen runtime and the adapter CI correction; no implementation blockers remain. Sol high repeated the frozen corpus after review: Chromium serial decode 2232.9 → 2175.5 ms, eight-worker decode 399.9 → 382.7 ms, indexed PCM verification 11568.0 → 2193.2 ms. Every digest and count passed. Both candidates are accepted for release. Most hashing improvement comes from scalar Wasm; the separately measured SIMD increment is 1.54%. These are compute measurements, not app-open timings.
+
+Full review, report, and immutable raw measurements are retained in `.github/RELEASE_EVIDENCE/006/`. Root is preparing the release; publication remains pending.
