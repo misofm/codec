@@ -1,6 +1,6 @@
 {
   "asset": "flac-decoder.wasm",
-  "assetSha256": "5e282f9874ecb3f49b8ee8437efc318ec14ef5cff5b7580da9d875f94e5c5925",
+  "assetSha256": "70caf38185675dff89498e89f98171d49ec6f143a56c6895088d93c35e2018cd",
   "libflac": {
     "version": "1.5.0",
     "archive": "vendor/libflac-1.5.0/flac-1.5.0.tar.xz",
@@ -88,6 +88,7 @@
     ],
     "compilerFlags": [
       "-O3",
+      "-msimd128",
       "-ffreestanding",
       "-fno-builtin",
       "-DFLAC__NO_DLL",
@@ -102,6 +103,10 @@
     },
     "asyncifyImports": [
       "codec.read"
+    ],
+    "wasmFeatures": [
+      "bulk-memory",
+      "simd128"
     ]
   }
 }

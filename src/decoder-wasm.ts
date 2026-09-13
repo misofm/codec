@@ -11,7 +11,7 @@ export const FLAC_DECODER_WASM_URL = new URL(
 
 // Updated only by the explicit reproducible Wasm build command.
 export const FLAC_DECODER_WASM_SHA256 =
-  "5e282f9874ecb3f49b8ee8437efc318ec14ef5cff5b7580da9d875f94e5c5925";
+  "70caf38185675dff89498e89f98171d49ec6f143a56c6895088d93c35e2018cd";
 
 export const FLAC_DECODER_LIMITS = {
   maxInputChunkBytes: 256 * 1024,
