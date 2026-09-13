@@ -85,3 +85,7 @@ codec commit and decoder hash, with one-worker decode 2,200.9 ms
 Fresh Astra medium verified the frozen runtime and the adapter CI correction; no implementation blockers remain. Sol high repeated the frozen corpus after review: Chromium serial decode 2232.9 → 2175.5 ms, eight-worker decode 399.9 → 382.7 ms, indexed PCM verification 11568.0 → 2193.2 ms. Every digest and count passed. Both candidates are accepted for release. Most hashing improvement comes from scalar Wasm; the separately measured SIMD increment is 1.54%. These are compute measurements, not app-open timings.
 
 Full review, report, and immutable raw measurements are retained in `.github/RELEASE_EVIDENCE/006/`. Root is preparing the release; publication remains pending.
+
+## Published release
+
+Codec 0.1.1 was merged in PR #7 at `04093a95187308e41e142e29862bfee3fb0e20b6`, published through trusted publishing, and registry-qualified across the supported consumer matrix: https://github.com/misofm/codec/actions/runs/34751375776 . The `v0.1.1` release tag points to that revision. Registry identity and decoder hash are recorded in `.github/RELEASE_EVIDENCE/006/registry-release.json`.
