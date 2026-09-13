@@ -1,0 +1,177 @@
+{
+  "tarballFilename": "misofm-codec-0.1.0.tgz",
+  "tarballSha256": "3c318e0e5ccb861994b5084f5b3aeea857d79c5ae78f5fc412f2e85d8dd10a36",
+  "tarballIntegrity": "sha512-Oleo8mUbyNzooQIgOsdxfxBYGhBXAJyGvZCna5cTcD8vGdfgcxMTUvzbCSccEOUYQ6vg+87WbI0UYmcEQpAk0w==",
+  "packedBytes": 139230,
+  "unpackedBytes": 418452,
+  "files": [
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "dist/decode.d.ts",
+    "dist/decode.d.ts.map",
+    "dist/decode.js",
+    "dist/decode.js.map",
+    "dist/decoder-errors.d.ts",
+    "dist/decoder-errors.d.ts.map",
+    "dist/decoder-errors.js",
+    "dist/decoder-errors.js.map",
+    "dist/decoder-wasm.d.ts",
+    "dist/decoder-wasm.d.ts.map",
+    "dist/decoder-wasm.js",
+    "dist/decoder-wasm.js.map",
+    "dist/encode.d.ts",
+    "dist/encode.d.ts.map",
+    "dist/encode.js",
+    "dist/encode.js.map",
+    "dist/errors.d.ts",
+    "dist/errors.d.ts.map",
+    "dist/errors.js",
+    "dist/errors.js.map",
+    "dist/format.d.ts",
+    "dist/format.d.ts.map",
+    "dist/format.js",
+    "dist/format.js.map",
+    "dist/index.d.ts",
+    "dist/index.d.ts.map",
+    "dist/index.js",
+    "dist/index.js.map",
+    "dist/internal/decoder-abi.d.ts",
+    "dist/internal/decoder-abi.d.ts.map",
+    "dist/internal/decoder-abi.js",
+    "dist/internal/decoder-abi.js.map",
+    "dist/internal/encoder-abi.d.ts",
+    "dist/internal/encoder-abi.d.ts.map",
+    "dist/internal/encoder-abi.js",
+    "dist/internal/encoder-abi.js.map",
+    "dist/node.d.ts",
+    "dist/node.d.ts.map",
+    "dist/node.js",
+    "dist/node.js.map",
+    "dist/wasm.d.ts",
+    "dist/wasm.d.ts.map",
+    "dist/wasm.js",
+    "dist/wasm.js.map",
+    "docs/adapter-integration.md",
+    "docs/architecture.md",
+    "package.json",
+    "vendor/licenses/compiler-rt.txt",
+    "vendor/licenses/emscripten.txt",
+    "vendor/licenses/libFLAC.txt",
+    "vendor/licenses/musl.txt",
+    "wasm/flac-decoder.manifest.json",
+    "wasm/flac-decoder.wasm",
+    "wasm/flac-encoder.manifest.json",
+    "wasm/flac-encoder.wasm"
+  ],
+  "consumers": [
+    {
+      "effect": "4.0.0-rc.112",
+      "bun": {
+        "runtime": "Bun 1.4.2",
+        "formats": 4,
+        "verifiedFrames": 32772,
+        "verifiedBytes": 122895,
+        "cancellation": true,
+        "truncation": true
+      },
+      "node": {
+        "runtime": "Node v22.23.2",
+        "formats": 4,
+        "verifiedFrames": 32772,
+        "verifiedBytes": 122895,
+        "cancellation": true,
+        "truncation": true
+      },
+      "browser": [
+        {
+          "browser": "chromium",
+          "version": "151.0.7922.34",
+          "worker": {
+            "formats": 4,
+            "verifiedFrames": 32772,
+            "verifiedBytes": 122895,
+            "cancellation": true,
+            "truncation": true
+          }
+        },
+        {
+          "browser": "firefox",
+          "version": "153.0",
+          "worker": {
+            "formats": 4,
+            "verifiedFrames": 32772,
+            "verifiedBytes": 122895,
+            "cancellation": true,
+            "truncation": true
+          }
+        },
+        {
+          "browser": "webkit",
+          "version": "26.5",
+          "worker": {
+            "formats": 4,
+            "verifiedFrames": 32772,
+            "verifiedBytes": 122895,
+            "cancellation": true,
+            "truncation": true
+          }
+        }
+      ]
+    },
+    {
+      "effect": "4.0.0-rc.115",
+      "bun": {
+        "runtime": "Bun 1.4.2",
+        "formats": 4,
+        "verifiedFrames": 32772,
+        "verifiedBytes": 122895,
+        "cancellation": true,
+        "truncation": true
+      },
+      "node": {
+        "runtime": "Node v22.23.2",
+        "formats": 4,
+        "verifiedFrames": 32772,
+        "verifiedBytes": 122895,
+        "cancellation": true,
+        "truncation": true
+      },
+      "browser": [
+        {
+          "browser": "chromium",
+          "version": "151.0.7922.34",
+          "worker": {
+            "formats": 4,
+            "verifiedFrames": 32772,
+            "verifiedBytes": 122895,
+            "cancellation": true,
+            "truncation": true
+          }
+        },
+        {
+          "browser": "firefox",
+          "version": "153.0",
+          "worker": {
+            "formats": 4,
+            "verifiedFrames": 32772,
+            "verifiedBytes": 122895,
+            "cancellation": true,
+            "truncation": true
+          }
+        },
+        {
+          "browser": "webkit",
+          "version": "26.5",
+          "worker": {
+            "formats": 4,
+            "verifiedFrames": 32772,
+            "verifiedBytes": 122895,
+            "cancellation": true,
+            "truncation": true
+          }
+        }
+      ]
+    }
+  ]
+}
