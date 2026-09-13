@@ -72,3 +72,10 @@ test:integration` (5 passed), `bun run build:wasm:verify`, `bun run build`, and
 `bun run pack:check` (Bun/Node and Chromium/Firefox/WebKit packed consumers for
 Effect rc.112 and rc.115). Fresh independent review and root release remain
 pending; this candidate does not claim publication.
+
+The frozen implementation commit is `6265973b730230009b6d07705f1641a948120105`.
+The post-commit final browser record is
+`/tmp/miso-simd-study/evidence/browser-candidate-final.json`; it reports this
+codec commit and decoder hash, with one-worker decode 2,200.9 ms
+(2,181.7–2,239.6), eight-worker makespan 386.2 ms (371.3–397.9), and all
+547,303,704 bytes of indexed PCM verification passing.
