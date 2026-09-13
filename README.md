@@ -8,6 +8,12 @@ files, media pipelines, delivery chunks, manifests, storage, and publication.
 See [package boundaries](docs/architecture.md) and the
 [engine web adapter integration contract](docs/adapter-integration.md).
 
+Install the package with a supported Effect peer:
+
+```sh
+bun add @misofm/codec effect@4.0.0-rc.115
+```
+
 ## Encoding
 
 `encodeFlac(source, sink, options)` accepts an Effect stream of signed,
@@ -159,4 +165,4 @@ their process/host boundaries.
 
 The [server corpus benchmark](https://github.com/misofm/codec/tree/main/benchmark) records Wasm measurements
 separately from native libFLAC and validates every result against canonical PCM.
-No mobile benchmark is included. The package has not been published to npm.
+No mobile benchmark is included.
