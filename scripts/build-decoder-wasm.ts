@@ -39,6 +39,7 @@ const WASM_OPT_VERSION = "wasm-opt version 132 (version_132-49-gd03c25ea4)";
 const MEMORY_BYTES = 2 * 1024 * 1024;
 const STACK_BYTES = 64 * 1024;
 const ASYNCIFY_STACK_BYTES = 64 * 1024;
+const SIMD_COMPILER_FLAG = "-msimd128";
 
 const sha256 = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex");
@@ -113,7 +114,7 @@ const main = async (): Promise<void> => {
   const reproducibleEnv = {
     SOURCE_DATE_EPOCH: "1735689600",
     ZERO_AR_DATE: "1",
-    CFLAGS: "-O3 -DNDEBUG",
+    CFLAGS: `-O3 -DNDEBUG ${SIMD_COMPILER_FLAG}`,
   };
   await run(
     emconfigure,
@@ -139,6 +140,7 @@ const main = async (): Promise<void> => {
   );
   const commonCompile = [
     "-O3",
+    SIMD_COMPILER_FLAG,
     "-ffreestanding",
     "-fno-builtin",
     "-DFLAC__NO_DLL",
@@ -264,6 +266,7 @@ const main = async (): Promise<void> => {
       "--asyncify",
       "--pass-arg=asyncify-imports@codec.read",
       "--enable-bulk-memory",
+      "--enable-simd",
       "-O3",
       "--strip-debug",
       "-o",
@@ -342,6 +345,7 @@ const main = async (): Promise<void> => {
       libflacUnits: units,
       compilerFlags: [
         "-O3",
+        SIMD_COMPILER_FLAG,
         "-ffreestanding",
         "-fno-builtin",
         "-DFLAC__NO_DLL",
@@ -353,6 +357,7 @@ const main = async (): Promise<void> => {
         stripAll: true,
       },
       asyncifyImports: ["codec.read"],
+      wasmFeatures: ["bulk-memory", "simd128"],
     },
   } as const;
   const serializedManifest = `${JSON.stringify(manifest, null, 2)}\n`;

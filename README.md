@@ -144,6 +144,11 @@ round trips, cancellation, and typed truncation failures on Bun 1.4.2, Node
 22.23.2, and Chromium, Firefox, and WebKit workers. Consumer examples are compiled from an isolated
 installed tarball, without workspace aliases.
 
+The decoder asset uses standard WebAssembly SIMD (`simd128`). The advertised
+Bun, Node, Chromium, Firefox, and WebKit worker matrix is qualified with that
+feature enabled; environments that cannot compile standard Wasm SIMD should
+retain a scalar decoder asset supplied by the caller.
+
 Rebuilding Wasm requires the pinned Emscripten 6.0.9 toolchain. Set
 `CODEC_EMSCRIPTEN_ROOT` to its `upstream/emscripten` directory, then run:
 
