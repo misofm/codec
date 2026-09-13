@@ -45,11 +45,11 @@ package/compressed correctness hashes, manifest admission, Wasm fetch/compile,
 worker construction, network/CDN, OPFS, quota estimation, structured-clone
 acknowledgements, and input/output waits are outside the timed sections.
 
-| Slice | Published adjacent samples (ms) | Candidate samples (ms) | Median change | Candidate CV / throughput |
-| --- | --- | --- | ---: | ---: |
-| One-worker FLAC decode | 2197.2, 2232.9, 2268.7, 2243.6, 2226.3 | 2155.4, 2175.5, 2187.5, 2167.5, 2199.7 | 2232.9 → 2175.5, **2.57% faster** | 0.71%; 109.30 MiB/s |
-| Eight-worker decode makespan | 399.9, 404.9, 399.9, 391.7, 416.3 | 371.3, 404.3, 379.3, 382.7, 394.6 | 399.9 → 382.7, **4.30% faster** | 3.02%; 621.30 MiB/s |
-| Main-thread indexed PCM SHA | 11589.8, 11568.0, 11550.9 | 2184.3, 2201.6, 2193.2 | 11568.0 → 2193.2, **81.04% faster** | 0.32%; 237.99 MiB/s |
+| Slice                        | Published adjacent samples (ms)        | Candidate samples (ms)                 |                       Median change | Candidate CV / throughput |
+| ---------------------------- | -------------------------------------- | -------------------------------------- | ----------------------------------: | ------------------------: |
+| One-worker FLAC decode       | 2197.2, 2232.9, 2268.7, 2243.6, 2226.3 | 2155.4, 2175.5, 2187.5, 2167.5, 2199.7 |   2232.9 → 2175.5, **2.57% faster** |       0.71%; 109.30 MiB/s |
+| Eight-worker decode makespan | 399.9, 404.9, 399.9, 391.7, 416.3      | 371.3, 404.3, 379.3, 382.7, 394.6      |     399.9 → 382.7, **4.30% faster** |       3.02%; 621.30 MiB/s |
+| Main-thread indexed PCM SHA  | 11589.8, 11568.0, 11550.9              | 2184.3, 2201.6, 2193.2                 | 11568.0 → 2193.2, **81.04% faster** |       0.32%; 237.99 MiB/s |
 
 The unchanged-control CVs were 1.04%, 2.01%, and 0.14% respectively. Decoder
 gains are modest. The one-worker median improvement exceeds run variation and
@@ -73,10 +73,10 @@ The identical largest indexed chunk was rerun for seven rounds on Bun 1.4.2.
 Bun's reported `process.version` is compatibility metadata and is not a Node 26
 qualification.
 
-| Slice | Published adjacent median (range; CV) | Candidate median (range; CV) | Change |
-| --- | ---: | ---: | ---: |
-| FLAC decode, 7,938,000 PCM bytes | 60.117 ms (57.117–63.479; 3.85%) | 55.460 ms (51.870–62.195; 5.68%) | **7.75% faster** |
-| PCM SHA-256, 7,938,000 bytes | 389.382 ms (385.286–391.515; 0.55%) | 33.247 ms (33.181–33.836; 0.66%) | **91.46% faster** |
+| Slice                            | Published adjacent median (range; CV) |     Candidate median (range; CV) |            Change |
+| -------------------------------- | ------------------------------------: | -------------------------------: | ----------------: |
+| FLAC decode, 7,938,000 PCM bytes |      60.117 ms (57.117–63.479; 3.85%) | 55.460 ms (51.870–62.195; 5.68%) |  **7.75% faster** |
+| PCM SHA-256, 7,938,000 bytes     |   389.382 ms (385.286–391.515; 0.55%) | 33.247 ms (33.181–33.836; 0.66%) | **91.46% faster** |
 
 Exact samples are retained in the official Bun JSON files. The representative
 result supports the browser direction; the whole-corpus Chromium comparison is
