@@ -154,7 +154,7 @@ its reusable-library, Schema, stream, service, and consumer-testing guidance.
 Sol scoped and implemented this slice; independent Sol review found and drove
 fixes for runtime option validation, metadata structure/order, strict linking,
 ABI ranges/stalls, encoder metadata completeness, and successful cleanup errors.
-Final immutable-checkpoint review is pending below.
+The final immutable-checkpoint review signed off with no remaining blocker.
 
 The encoder accepts at most 4,096 frames per input element and stages at most
 256 KiB / 64 writes per native call in fixed 16 MiB Wasm memory. The decoder
@@ -235,9 +235,23 @@ Final local checks passed on the frozen implementation:
 - `git diff --check` passed. No media, generated dependencies/caches, or packed
   tarballs are committed.
 
-### Pending final evidence
+### Final review and CI
 
-- Immutable-checkpoint Sol review and final CI run.
+Independent Sol review signed off with no remaining blocker at
+`07189c3c709f77fb5218420896b76b152ae2b01a`. The complete final report is
+`docs/evidence/final-review.md`, SHA-256
+`272505166d9f076b800c6f84de85af518ee0810c5a45f5b7bf6978ab57cfffec`.
+The reviewer independently repeated ordinary/native checks, build, both offline
+Wasm rebuilds, and the full packed matrix, reproducing the same tarball hash.
+
+[GitHub CI run 34737906581](https://github.com/misofm/codec/actions/runs/34737906581)
+passed both jobs on that checkpoint: fresh native and browser/package verification,
+and clean pinned Wasm rebuilds. The follow-up commit records this evidence and
+removes one unused test-only binary literal; it changes no package source, asset,
+manifest, or packed file. The retained ABI regressions pass after that removal.
+
+Reviewable delivery: [draft PR #2](https://github.com/misofm/codec/pull/2).
+There are no remaining implementation blockers for this package slice.
 
 ### Release and integration status
 
