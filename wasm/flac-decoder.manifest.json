@@ -1,0 +1,107 @@
+{
+  "asset": "flac-decoder.wasm",
+  "assetSha256": "5e282f9874ecb3f49b8ee8437efc318ec14ef5cff5b7580da9d875f94e5c5925",
+  "libflac": {
+    "version": "1.5.0",
+    "archive": "vendor/libflac-1.5.0/flac-1.5.0.tar.xz",
+    "archiveSha256": "f2c1c76592a82ffff8413ba3c4a1299b6c7ab06c734dee03fd88630485c2b920"
+  },
+  "sources": {
+    "wrapper": "native/decoder.c",
+    "wrapperSha256": "9063ad212a83f506ada7caaefdf47ebad4d34d2744f8a0628c722bf3ffec8743",
+    "runtime": "native/decoder-runtime.c",
+    "runtimeSha256": "13fdff77ed97c94a84f9a2f28433c694aa82184c147a2acf7eb6e4f019675e22"
+  },
+  "emscripten": {
+    "version": "6.0.9",
+    "compilerCommit": "4e4223852a0835923411059a3929907d7df1232e",
+    "sdkTagCommit": "5eb0bde7585670252e8ba05e9d361627bffd08b5",
+    "sdkReleasesCommit": "f04ea239d533260dd1db760dd2d668d5f9a88d6b",
+    "wasmOptVersion": "wasm-opt version 132 (version_132-49-gd03c25ea4)"
+  },
+  "build": {
+    "initialMemoryBytes": 2097152,
+    "maximumMemoryBytes": 2097152,
+    "stackBytes": 65536,
+    "asyncifyStackBytes": 65536,
+    "filesystem": false,
+    "memoryGrowth": false,
+    "imports": [
+      "codec.read:function"
+    ],
+    "exports": [
+      "asyncify_get_state:function",
+      "asyncify_start_rewind:function",
+      "asyncify_start_unwind:function",
+      "asyncify_stop_rewind:function",
+      "asyncify_stop_unwind:function",
+      "codec_decoder_abi_version:function",
+      "codec_decoder_allocator_free_calls:function",
+      "codec_decoder_allocator_live_bytes:function",
+      "codec_decoder_allocator_peak_heap_bytes:function",
+      "codec_decoder_allocator_peak_live_bytes:function",
+      "codec_decoder_allocator_realloc_calls:function",
+      "codec_decoder_bits_per_sample:function",
+      "codec_decoder_callback_error:function",
+      "codec_decoder_channels:function",
+      "codec_decoder_decoded_bytes_high:function",
+      "codec_decoder_decoded_bytes_low:function",
+      "codec_decoder_decoded_frames_high:function",
+      "codec_decoder_decoded_frames_low:function",
+      "codec_decoder_delete:function",
+      "codec_decoder_finish:function",
+      "codec_decoder_init:function",
+      "codec_decoder_maximum_block_frames:function",
+      "codec_decoder_md5_present:function",
+      "codec_decoder_minimum_block_frames:function",
+      "codec_decoder_new:function",
+      "codec_decoder_output_frame_offset_high:function",
+      "codec_decoder_output_frame_offset_low:function",
+      "codec_decoder_output_frames:function",
+      "codec_decoder_output_length:function",
+      "codec_decoder_output_ptr:function",
+      "codec_decoder_process_single:function",
+      "codec_decoder_release_output:function",
+      "codec_decoder_sample_rate:function",
+      "codec_decoder_state:function",
+      "codec_decoder_streaminfo_frames_high:function",
+      "codec_decoder_streaminfo_frames_known:function",
+      "codec_decoder_streaminfo_frames_low:function",
+      "codec_decoder_total_frames_high:function",
+      "codec_decoder_total_frames_known:function",
+      "codec_decoder_total_frames_low:function",
+      "free:function",
+      "malloc:function",
+      "memory:memory"
+    ],
+    "libflacUnits": [
+      "bitmath",
+      "bitreader",
+      "cpu",
+      "crc",
+      "fixed",
+      "format",
+      "lpc",
+      "md5",
+      "memory",
+      "stream_decoder"
+    ],
+    "compilerFlags": [
+      "-O3",
+      "-ffreestanding",
+      "-fno-builtin",
+      "-DFLAC__NO_DLL",
+      "-DHAVE_CONFIG_H"
+    ],
+    "linkerPolicy": {
+      "allowedUndefinedSymbols": [
+        "codec_read"
+      ],
+      "noEntry": true,
+      "stripAll": true
+    },
+    "asyncifyImports": [
+      "codec.read"
+    ]
+  }
+}
