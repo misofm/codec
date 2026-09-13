@@ -1,0 +1,110 @@
+{
+  "asset": "flac-encoder.wasm",
+  "assetSha256": "90da75c73784e7184ea6c27d3ea9509f74df2eda405d8ddc8f964d78a16a273e",
+  "libflac": {
+    "version": "1.5.0",
+    "archive": "vendor/libflac-1.5.0/flac-1.5.0.tar.xz",
+    "archiveSha256": "f2c1c76592a82ffff8413ba3c4a1299b6c7ab06c734dee03fd88630485c2b920",
+    "patch": "native/libflac-stream-only.patch",
+    "patchSha256": "1fd807633c0ff8fc8ecca50225df49749ef1286f4a9796ce8ea7303f76143ffe"
+  },
+  "sources": {
+    "wrapper": "native/encoder.c",
+    "wrapperSha256": "51468fc2376a9cf70c5b95ee8d6596b12c2ec3806e8036db3617f089a298c5b5"
+  },
+  "emscripten": {
+    "version": "6.0.9",
+    "compilerCommit": "4e4223852a0835923411059a3929907d7df1232e",
+    "sdkTagCommit": "5eb0bde7585670252e8ba05e9d361627bffd08b5",
+    "sdkReleasesCommit": "f04ea239d533260dd1db760dd2d668d5f9a88d6b",
+    "wasmOptVersion": "wasm-opt version 132 (version_132-49-gd03c25ea4)"
+  },
+  "build": {
+    "initialMemoryBytes": 16777216,
+    "maximumMemoryBytes": 16777216,
+    "stackBytes": 262144,
+    "filesystem": false,
+    "memoryGrowth": false,
+    "imports": [
+      "codec.seek:function",
+      "codec.write:function"
+    ],
+    "exports": [
+      "__em_lib_deps__em_malloc_deps:global",
+      "codec_encoder_delete:function",
+      "codec_encoder_finish:function",
+      "codec_encoder_init:function",
+      "codec_encoder_new:function",
+      "codec_encoder_process_interleaved:function",
+      "codec_encoder_state:function",
+      "free:function",
+      "malloc:function",
+      "memory:memory"
+    ],
+    "libflacUnits": [
+      "bitmath",
+      "bitreader",
+      "bitwriter",
+      "cpu",
+      "crc",
+      "fixed",
+      "float",
+      "format",
+      "lpc",
+      "md5",
+      "memory",
+      "stream_decoder",
+      "stream_encoder",
+      "stream_encoder_framing",
+      "window"
+    ],
+    "muslUnits": [
+      "string/memcpy",
+      "string/memmove",
+      "string/memset",
+      "string/memcmp",
+      "string/strcmp",
+      "string/strlen",
+      "stdlib/abs",
+      "stdlib/qsort",
+      "stdlib/qsort_nr",
+      "math/log",
+      "math/log_data",
+      "math/exp",
+      "math/exp_data",
+      "math/frexp",
+      "math/lround",
+      "math/round",
+      "math/floor",
+      "math/cosf",
+      "math/fabs",
+      "math/fabsf",
+      "math/scalbn",
+      "math/__cosdf",
+      "math/__sindf",
+      "math/__rem_pio2f",
+      "math/__rem_pio2_large",
+      "math/__math_uflow",
+      "math/__math_oflow",
+      "math/__math_divzero",
+      "math/__math_invalid",
+      "math/__math_xflow"
+    ],
+    "compilerFlags": [
+      "-O3",
+      "-ffreestanding",
+      "-fno-builtin",
+      "-DFLAC__NO_DLL",
+      "-DHAVE_CONFIG_H",
+      "-DCODEC_STREAM_ONLY=1"
+    ],
+    "linkerPolicy": {
+      "allowedUndefinedSymbols": [
+        "codec_seek",
+        "codec_write"
+      ],
+      "noEntry": true,
+      "stripAll": true
+    }
+  }
+}

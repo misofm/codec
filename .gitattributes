@@ -1,0 +1,2 @@
+# Unified patch context uses a required leading space before upstream tabs.
+native/*.patch whitespace=-space-before-tab
