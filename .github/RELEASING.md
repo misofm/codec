@@ -44,8 +44,12 @@ account and completing npm's own browser/passkey challenge when requested:
 ```sh
 npm exec --yes --package npm@11.19.1 -- npm trust github @misofm/codec \
   --repo=misofm/codec --file=npm-publish.yml --allow-publish --yes
-npm exec --yes --package npm@11.19.1 -- npm trust list @misofm/codec --json
+npm exec --yes --package npm@11.19.1 -- npm trust list @misofm/codec
 ```
+
+Use interactive text output for trust commands: JSON output can buffer the
+browser authentication link while the command waits. npm may require a separate
+authentication for the read-back command as well as the settings change.
 
 This does not install or replace the local global npm client. GitHub-hosted
 publishing uses short-lived OIDC credentials, and npm generates provenance for

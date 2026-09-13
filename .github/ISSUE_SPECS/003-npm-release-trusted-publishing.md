@@ -49,6 +49,33 @@ has exercised an OIDC publish. Any pending authentication remains explicit.
 
 ## Current status
 
-The local npm account is authenticated with write access to the organization,
-2FA is enabled, and `@misofm/codec` does not yet exist in the registry. Release
-workflow implementation, review, publication, and trust configuration are pending.
+Release tooling is merged through [PR 4](https://github.com/misofm/codec/pull/4).
+The release main commit is `12f54c988a2df319064e6ca3885268d976319cc1`, with
+[green CI](https://github.com/misofm/codec/actions/runs/34740760831). Fresh Sol
+review signed off `5d7e1a7ceb667276c84934e0a61e95c725e5cae6`; the merge has the
+same tree. Review evidence is in `../RELEASE_EVIDENCE/003/review.md`.
+
+The exact main commit passed the complete ten-combination packed-consumer matrix
+under npm 11.19.1. The retained 139,230-byte tarball has SHA-256
+`3c318e0e5ccb861994b5084f5b3aeea857d79c5ae78f5fc412f2e85d8dd10a36` and integrity
+`sha512-Oleo8mUbyNzooQIgOsdxfxBYGhBXAJyGvZCna5cTcD8vGdfgcxMTUvzbCSccEOUYQ6vg+87WbI0UYmcEQpAk0w==`.
+The consumer and package receipt is in
+`../RELEASE_EVIDENCE/003/qualified-tarball.json`.
+
+`@misofm/codec@0.1.0` was published through the authorized local npm CLI with
+`--ignore-scripts --provenance=false`. The registry reports `latest: 0.1.0`.
+Downloaded registry bytes match both recorded digests, and the normal registry
+package passed the full ten-combination consumer matrix. Receipts are in
+`../RELEASE_EVIDENCE/003/registry-artifact.json` and `registry-consumer.json`.
+
+npm confirmed trusted publisher `26f5b08e-325d-42b8-85e3-bdc68ae84ddb`, provider
+GitHub, repository `misofm/codec`, workflow `npm-publish.yml`, with direct publish
+and npm's default stage-publish permissions. A separate read-back authentication
+is pending.
+
+The initial [verify workflow](https://github.com/misofm/codec/actions/runs/34741165009)
+passed qualification, registry byte comparison, and all registry consumers. Its
+final signature audit step failed on shell heredoc indentation. A workflow-only
+fix preserves the audit and provenance gates; all fourteen extracted shell blocks
+now pass `bash -n`, and actionlint passes. Fresh review and a green verify dispatch
+of that correction remain required. Verify mode does not exercise OIDC publication.

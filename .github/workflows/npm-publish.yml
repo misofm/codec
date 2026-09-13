@@ -401,24 +401,26 @@ jobs:
           npm init --yes >/dev/null
           npm install --ignore-scripts --save-exact "$EXPECTED_PACKAGE@$DISPATCH_VERSION" >/dev/null
           npm audit signatures --json --include-attestations > audit-signatures.json
-          if test "$DISPATCH_MODE" = publish; then
-            node --input-type=module <<'NODE'
-            import { readFile } from "node:fs/promises";
-            const report = JSON.parse(
-              await readFile("audit-signatures.json", "utf8"),
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          if (process.env.DISPATCH_MODE !== "publish") {
+            process.stdout.write(
+              "Verify mode was read-only and does not claim an OIDC publication.\n",
             );
-            const target = report.verified?.find(
-              ({ name, version }) =>
-                name === process.env.EXPECTED_PACKAGE &&
-                version === process.env.DISPATCH_VERSION,
-            );
-            if (
-              target?.attestations?.provenance?.predicateType !==
-              "https://slsa.dev/provenance/v1"
-            ) {
-              throw new Error("OIDC publication lacks a verified provenance attestation");
-            }
-            NODE
-          else
-            echo "Verify mode was read-only and does not claim an OIDC publication."
-          fi
+            process.exit(0);
+          }
+          const report = JSON.parse(
+            await readFile("audit-signatures.json", "utf8"),
+          );
+          const target = report.verified?.find(
+            ({ name, version }) =>
+              name === process.env.EXPECTED_PACKAGE &&
+              version === process.env.DISPATCH_VERSION,
+          );
+          if (
+            target?.attestations?.provenance?.predicateType !==
+            "https://slsa.dev/provenance/v1"
+          ) {
+            throw new Error("OIDC publication lacks a verified provenance attestation");
+          }
+          NODE
