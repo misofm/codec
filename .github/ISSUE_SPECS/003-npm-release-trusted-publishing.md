@@ -76,6 +76,22 @@ is pending.
 The initial [verify workflow](https://github.com/misofm/codec/actions/runs/34741165009)
 passed qualification, registry byte comparison, and all registry consumers. Its
 final signature audit step failed on shell heredoc indentation. A workflow-only
-fix preserves the audit and provenance gates; all fourteen extracted shell blocks
-now pass `bash -n`, and actionlint passes. Fresh review and a green verify dispatch
-of that correction remain required. Verify mode does not exercise OIDC publication.
+fix in [PR 5](https://github.com/misofm/codec/pull/5) preserves the audit and
+provenance gates; all fourteen extracted shell blocks pass `bash -n`, and
+actionlint passes. Fresh Sol review signed off
+`b234c1f94b4684c747adde1606dcb341c1c44288`; its report is in
+`../RELEASE_EVIDENCE/003/audit-fix-review.md`.
+
+The corrected [verify dispatch](https://github.com/misofm/codec/actions/runs/34741682192)
+at main `1f3bd1da525901bcab72f21ea4ed410f2c9ca33d` passed all three jobs:
+qualification, registry artifact comparison, and registry consumers/signatures.
+This commit changes only release tooling/evidence relative to the package release;
+the registry tarball remains identical. Verify mode did not exercise OIDC publication.
+
+The [v0.1.0 GitHub release](https://github.com/misofm/codec/releases/tag/v0.1.0)
+targets the original release source `12f54c988a2df319064e6ca3885268d976319cc1`.
+Package publication, registry qualification, tag/release, and trusted-publisher
+creation are complete. The sole remaining issue gate is the separate authenticated
+trust read-back; its expired challenge is awaiting user availability for a fresh
+link. Creation-response evidence is in
+`../RELEASE_EVIDENCE/003/trusted-publisher.json`.

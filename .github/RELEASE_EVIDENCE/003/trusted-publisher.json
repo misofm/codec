@@ -1,0 +1,11 @@
+{
+  "package": "@misofm/codec",
+  "provider": "github",
+  "id": "26f5b08e-325d-42b8-85e3-bdc68ae84ddb",
+  "repository": "misofm/codec",
+  "workflowFile": "npm-publish.yml",
+  "permissions": ["publish", "stage publish"],
+  "confirmation": "npm 11.19.1 trust github creation response",
+  "readBack": "pending user authentication",
+  "oidcPublication": "not exercised by the local bootstrap or verify-only workflow"
+}
