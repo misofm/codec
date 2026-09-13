@@ -164,8 +164,6 @@ jobs:
     env:
       NODE_AUTH_TOKEN: ""
       NPM_AUTH_TOKEN: ""
-      NPM_CONFIG_GLOBALCONFIG: ${{ runner.temp }}/npm-globalrc
-      NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-userrc
       NPM_TOKEN: ""
     steps:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -174,10 +172,14 @@ jobs:
       - name: Select the pinned npm without a global install
         run: |
           set -euo pipefail
+          export NPM_CONFIG_GLOBALCONFIG="$RUNNER_TEMP/npm-globalrc"
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npm-userrc"
           touch "$NPM_CONFIG_GLOBALCONFIG" "$NPM_CONFIG_USERCONFIG"
           npm_bin=$(npm exec --yes --package="npm@$PINNED_NPM_VERSION" -- which npm)
           test "$("$npm_bin" --version)" = "$PINNED_NPM_VERSION"
           echo "$(dirname "$npm_bin")" >> "$GITHUB_PATH"
+          echo "NPM_CONFIG_GLOBALCONFIG=$NPM_CONFIG_GLOBALCONFIG" >> "$GITHUB_ENV"
+          echo "NPM_CONFIG_USERCONFIG=$NPM_CONFIG_USERCONFIG" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: qualified-npm-package
@@ -356,8 +358,6 @@ jobs:
     env:
       NODE_AUTH_TOKEN: ""
       NPM_AUTH_TOKEN: ""
-      NPM_CONFIG_GLOBALCONFIG: ${{ runner.temp }}/npm-globalrc
-      NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-userrc
       NPM_TOKEN: ""
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -373,10 +373,14 @@ jobs:
       - name: Select the pinned npm without a global install
         run: |
           set -euo pipefail
+          export NPM_CONFIG_GLOBALCONFIG="$RUNNER_TEMP/npm-globalrc"
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/npm-userrc"
           touch "$NPM_CONFIG_GLOBALCONFIG" "$NPM_CONFIG_USERCONFIG"
           npm_bin=$(npm exec --yes --package="npm@$PINNED_NPM_VERSION" -- which npm)
           test "$("$npm_bin" --version)" = "$PINNED_NPM_VERSION"
           echo "$(dirname "$npm_bin")" >> "$GITHUB_PATH"
+          echo "NPM_CONFIG_GLOBALCONFIG=$NPM_CONFIG_GLOBALCONFIG" >> "$GITHUB_ENV"
+          echo "NPM_CONFIG_USERCONFIG=$NPM_CONFIG_USERCONFIG" >> "$GITHUB_ENV"
       - run: bun install --frozen-lockfile
       - run: bunx playwright install --with-deps chromium firefox webkit
       - name: Run the full consumer matrix against the registry tarball
