@@ -1,0 +1,420 @@
+name: npm publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Compare an existing release or publish an absent version
+        required: true
+        type: choice
+        options:
+          - verify
+          - publish
+      expected_sha:
+        description: Exact lowercase SHA of the current main commit
+        required: true
+        type: string
+      expected_version:
+        description: Exact package version to qualify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  EXPECTED_PACKAGE: "@misofm/codec"
+  EXPECTED_REPOSITORY: "git+https://github.com/misofm/codec.git"
+  PINNED_NPM_VERSION: "11.19.1"
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      tarball_filename: ${{ steps.artifact.outputs.filename }}
+      tarball_integrity: ${{ steps.artifact.outputs.integrity }}
+      tarball_sha256: ${{ steps.artifact.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          persist-credentials: false
+      - name: Admit the exact main package
+        env:
+          DISPATCH_SHA: ${{ inputs.expected_sha }}
+          DISPATCH_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$DISPATCH_SHA"
+          test "$(git rev-parse HEAD)" = "$DISPATCH_SHA"
+          main_sha=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+          test "$main_sha" = "$DISPATCH_SHA"
+          node --input-type=module <<'NODE'
+          import { readFile } from "node:fs/promises";
+          const manifest = JSON.parse(await readFile("package.json", "utf8"));
+          const expected = {
+            name: process.env.EXPECTED_PACKAGE,
+            version: process.env.DISPATCH_VERSION,
+            repository: process.env.EXPECTED_REPOSITORY,
+          };
+          if (
+            manifest.name !== expected.name ||
+            manifest.version !== expected.version ||
+            manifest.repository?.type !== "git" ||
+            manifest.repository?.url !== expected.repository
+          ) {
+            throw new Error(
+              `release identity mismatch: ${JSON.stringify({
+                name: manifest.name,
+                version: manifest.version,
+                repository: manifest.repository,
+              })}`,
+            );
+          }
+          NODE
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: Select the pinned npm without a global install
+        run: |
+          set -euo pipefail
+          npm_bin=$(npm exec --yes --package="npm@$PINNED_NPM_VERSION" -- which npm)
+          test "$("$npm_bin" --version)" = "$PINNED_NPM_VERSION"
+          echo "$(dirname "$npm_bin")" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium firefox webkit
+      - run: bun run check
+      - name: Run the fresh native libFLAC oracle
+        run: |
+          set -euo pipefail
+          codec_native_flac=$(scripts/build-native-flac.sh)
+          CODEC_NATIVE_FLAC="$codec_native_flac" bun run test:integration
+      - name: Install pinned Emscripten
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch 6.0.9 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/codec-emsdk"
+          test "$(git -C "$RUNNER_TEMP/codec-emsdk" rev-parse HEAD)" = 5eb0bde7585670252e8ba05e9d361627bffd08b5
+          "$RUNNER_TEMP/codec-emsdk/emsdk" install 6.0.9
+          "$RUNNER_TEMP/codec-emsdk/emsdk" activate 6.0.9
+          echo "CODEC_EMSCRIPTEN_ROOT=$RUNNER_TEMP/codec-emsdk/upstream/emscripten" >> "$GITHUB_ENV"
+      - run: bun run build:wasm:verify
+      - name: Build and qualify the release tarball
+        env:
+          CODEC_PACK_DESTINATION: ${{ runner.temp }}/codec-release
+          CODEC_PACK_RECEIPT: ${{ runner.temp }}/codec-pack-receipt.json
+        run: |
+          set -euo pipefail
+          mkdir "$CODEC_PACK_DESTINATION"
+          bun run pack:check
+      - name: Check the qualified artifact
+        id: artifact
+        env:
+          RELEASE_DIRECTORY: ${{ runner.temp }}/codec-release
+          RECEIPT_PATH: ${{ runner.temp }}/codec-pack-receipt.json
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { appendFile, readFile, readdir } from "node:fs/promises";
+          import { join } from "node:path";
+          const receipt = JSON.parse(await readFile(process.env.RECEIPT_PATH, "utf8"));
+          const entries = await readdir(process.env.RELEASE_DIRECTORY);
+          if (entries.length !== 1 || entries[0] !== receipt.tarballFilename) {
+            throw new Error("release directory does not contain exactly the tested tarball");
+          }
+          const bytes = await readFile(join(process.env.RELEASE_DIRECTORY, entries[0]));
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+          if (sha256 !== receipt.tarballSha256 || integrity !== receipt.tarballIntegrity) {
+            throw new Error("qualified tarball does not match its receipt");
+          }
+          await appendFile(
+            process.env.GITHUB_OUTPUT,
+            `filename=${receipt.tarballFilename}\nsha256=${sha256}\nintegrity=${integrity}\n`,
+          );
+          NODE
+          mkdir "$RUNNER_TEMP/npm-artifact"
+          cp "$RELEASE_DIRECTORY"/*.tgz "$RUNNER_TEMP/npm-artifact/"
+          cp "$RECEIPT_PATH" "$RUNNER_TEMP/npm-artifact/pack-receipt.json"
+      - run: git diff --check && git diff --exit-code
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: qualified-npm-package
+          path: ${{ runner.temp }}/npm-artifact
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-or-compare:
+    needs: qualify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ""
+      NPM_AUTH_TOKEN: ""
+      NPM_CONFIG_GLOBALCONFIG: ${{ runner.temp }}/npm-globalrc
+      NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-userrc
+      NPM_TOKEN: ""
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.2
+      - name: Select the pinned npm without a global install
+        run: |
+          set -euo pipefail
+          touch "$NPM_CONFIG_GLOBALCONFIG" "$NPM_CONFIG_USERCONFIG"
+          npm_bin=$(npm exec --yes --package="npm@$PINNED_NPM_VERSION" -- which npm)
+          test "$("$npm_bin" --version)" = "$PINNED_NPM_VERSION"
+          echo "$(dirname "$npm_bin")" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: qualified-npm-package
+          path: ${{ runner.temp }}/qualified-npm-package
+      - name: Revalidate the immutable qualified artifact
+        env:
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/qualified-npm-package
+          DISPATCH_VERSION: ${{ inputs.expected_version }}
+          EXPECTED_FILENAME: ${{ needs.qualify.outputs.tarball_filename }}
+          EXPECTED_INTEGRITY: ${{ needs.qualify.outputs.tarball_integrity }}
+          EXPECTED_SHA256: ${{ needs.qualify.outputs.tarball_sha256 }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { spawnSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import { readFile, readdir } from "node:fs/promises";
+          import { join } from "node:path";
+          const directory = process.env.ARTIFACT_DIRECTORY;
+          const entries = (await readdir(directory)).sort();
+          if (
+            entries.length !== 2 ||
+            !entries.includes("pack-receipt.json") ||
+            !entries.includes(process.env.EXPECTED_FILENAME)
+          ) {
+            throw new Error("downloaded artifact has unexpected contents");
+          }
+          const receipt = JSON.parse(
+            await readFile(join(directory, "pack-receipt.json"), "utf8"),
+          );
+          const tarball = join(directory, process.env.EXPECTED_FILENAME);
+          const bytes = await readFile(tarball);
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+          if (
+            receipt.tarballFilename !== process.env.EXPECTED_FILENAME ||
+            receipt.tarballSha256 !== process.env.EXPECTED_SHA256 ||
+            receipt.tarballIntegrity !== process.env.EXPECTED_INTEGRITY ||
+            sha256 !== process.env.EXPECTED_SHA256 ||
+            integrity !== process.env.EXPECTED_INTEGRITY
+          ) {
+            throw new Error("downloaded tarball or receipt differs from qualification");
+          }
+          const packedJson = spawnSync(
+            "tar",
+            ["-xOf", tarball, "package/package.json"],
+            { encoding: "utf8" },
+          );
+          if (packedJson.status !== 0) throw new Error(packedJson.stderr);
+          const manifest = JSON.parse(packedJson.stdout);
+          if (
+            manifest.name !== process.env.EXPECTED_PACKAGE ||
+            manifest.version !== process.env.DISPATCH_VERSION ||
+            manifest.repository?.type !== "git" ||
+            manifest.repository?.url !== process.env.EXPECTED_REPOSITORY
+          ) {
+            throw new Error("downloaded tarball has an unexpected package identity");
+          }
+          NODE
+      - name: Check registry version admission
+        env:
+          DISPATCH_MODE: ${{ inputs.mode }}
+          DISPATCH_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const url = `https://registry.npmjs.org/${encodeURIComponent(process.env.EXPECTED_PACKAGE)}/${encodeURIComponent(process.env.DISPATCH_VERSION)}`;
+          let response;
+          try {
+            response = await fetch(url, { headers: { accept: "application/json" } });
+          } catch (error) {
+            throw new Error(`npm registry version lookup failed`, { cause: error });
+          }
+          if (response.status === 404) {
+            if (process.env.DISPATCH_MODE === "verify") {
+              throw new Error("verify mode requires the exact registry version to exist");
+            }
+            process.stdout.write("Exact version is absent; publication is admitted.\n");
+          } else if (!response.ok) {
+            throw new Error(`npm registry version lookup returned HTTP ${response.status}`);
+          } else if (process.env.DISPATCH_MODE === "publish") {
+            throw new Error("publish mode requires the exact registry version to be absent");
+          } else {
+            const metadata = await response.json();
+            if (
+              metadata.name !== process.env.EXPECTED_PACKAGE ||
+              metadata.version !== process.env.DISPATCH_VERSION
+            ) {
+              throw new Error("registry returned an unexpected version document");
+            }
+            process.stdout.write("Exact version exists; read-only verification is admitted.\n");
+          }
+          NODE
+      - name: Publish the exact qualified tarball through OIDC
+        if: inputs.mode == 'publish'
+        env:
+          TARBALL: ${{ runner.temp }}/qualified-npm-package/${{ needs.qualify.outputs.tarball_filename }}
+        run: npm publish "$TARBALL" --access public --ignore-scripts --provenance
+      - name: Compare the registry tarball with qualification
+        env:
+          DISPATCH_MODE: ${{ inputs.mode }}
+          DISPATCH_VERSION: ${{ inputs.expected_version }}
+          EXPECTED_INTEGRITY: ${{ needs.qualify.outputs.tarball_integrity }}
+          EXPECTED_SHA256: ${{ needs.qualify.outputs.tarball_sha256 }}
+          REGISTRY_TARBALL: ${{ runner.temp }}/registry-package.tgz
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { writeFile } from "node:fs/promises";
+          const versionUrl = `https://registry.npmjs.org/${encodeURIComponent(process.env.EXPECTED_PACKAGE)}/${encodeURIComponent(process.env.DISPATCH_VERSION)}`;
+          let metadata;
+          for (let attempt = 1; attempt <= 24; attempt++) {
+            let response;
+            try {
+              response = await fetch(versionUrl, {
+                headers: { accept: "application/json" },
+              });
+            } catch (error) {
+              throw new Error("npm registry convergence lookup failed", {
+                cause: error,
+              });
+            }
+            if (response.ok) {
+              metadata = await response.json();
+              break;
+            }
+            if (response.status !== 404 || process.env.DISPATCH_MODE !== "publish") {
+              throw new Error(
+                `npm registry convergence lookup returned HTTP ${response.status}`,
+              );
+            }
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+          }
+          if (!metadata) throw new Error("published version did not converge in two minutes");
+          if (
+            metadata.name !== process.env.EXPECTED_PACKAGE ||
+            metadata.version !== process.env.DISPATCH_VERSION ||
+            metadata.repository?.type !== "git" ||
+            metadata.repository?.url !== process.env.EXPECTED_REPOSITORY ||
+            metadata.dist?.integrity !== process.env.EXPECTED_INTEGRITY
+          ) {
+            throw new Error("registry package metadata differs from qualification");
+          }
+          const tarballUrl = new URL(metadata.dist.tarball);
+          if (
+            tarballUrl.protocol !== "https:" ||
+            tarballUrl.hostname !== "registry.npmjs.org"
+          ) {
+            throw new Error("registry returned an unexpected tarball URL");
+          }
+          const tarballResponse = await fetch(tarballUrl);
+          if (!tarballResponse.ok) {
+            throw new Error(
+              `registry tarball download returned HTTP ${tarballResponse.status}`,
+            );
+          }
+          const bytes = new Uint8Array(await tarballResponse.arrayBuffer());
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+          if (
+            sha256 !== process.env.EXPECTED_SHA256 ||
+            integrity !== process.env.EXPECTED_INTEGRITY
+          ) {
+            throw new Error("registry tarball differs from the qualified tarball");
+          }
+          await writeFile(process.env.REGISTRY_TARBALL, bytes);
+          process.stdout.write(`registry tarball SHA-256 ${sha256}\n`);
+          NODE
+
+  registry-consumer:
+    needs: [qualify, publish-or-compare]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      NODE_AUTH_TOKEN: ""
+      NPM_AUTH_TOKEN: ""
+      NPM_CONFIG_GLOBALCONFIG: ${{ runner.temp }}/npm-globalrc
+      NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npm-userrc
+      NPM_TOKEN: ""
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.23.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: Select the pinned npm without a global install
+        run: |
+          set -euo pipefail
+          touch "$NPM_CONFIG_GLOBALCONFIG" "$NPM_CONFIG_USERCONFIG"
+          npm_bin=$(npm exec --yes --package="npm@$PINNED_NPM_VERSION" -- which npm)
+          test "$("$npm_bin" --version)" = "$PINNED_NPM_VERSION"
+          echo "$(dirname "$npm_bin")" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium firefox webkit
+      - name: Run the full consumer matrix against the registry tarball
+        env:
+          CODEC_PACK_EXPECTED_SHA256: ${{ needs.qualify.outputs.tarball_sha256 }}
+          CODEC_PACK_RECEIPT: ${{ runner.temp }}/registry-pack-receipt.json
+          CODEC_PACK_SOURCE: ${{ env.EXPECTED_PACKAGE }}@${{ inputs.expected_version }}
+        run: bun run pack:check
+      - name: Verify registry signatures and conditional provenance
+        env:
+          DISPATCH_MODE: ${{ inputs.mode }}
+          DISPATCH_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          audit_directory="$RUNNER_TEMP/codec-signature-audit"
+          mkdir "$audit_directory"
+          cd "$audit_directory"
+          npm init --yes >/dev/null
+          npm install --ignore-scripts --save-exact "$EXPECTED_PACKAGE@$DISPATCH_VERSION" >/dev/null
+          npm audit signatures --json --include-attestations > audit-signatures.json
+          if test "$DISPATCH_MODE" = publish; then
+            node --input-type=module <<'NODE'
+            import { readFile } from "node:fs/promises";
+            const report = JSON.parse(
+              await readFile("audit-signatures.json", "utf8"),
+            );
+            const target = report.verified?.find(
+              ({ name, version }) =>
+                name === process.env.EXPECTED_PACKAGE &&
+                version === process.env.DISPATCH_VERSION,
+            );
+            if (
+              target?.attestations?.provenance?.predicateType !==
+              "https://slsa.dev/provenance/v1"
+            ) {
+              throw new Error("OIDC publication lacks a verified provenance attestation");
+            }
+            NODE
+          else
+            echo "Verify mode was read-only and does not claim an OIDC publication."
+          fi

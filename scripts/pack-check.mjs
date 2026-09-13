@@ -1,14 +1,40 @@
 import { spawnSync } from "node:child_process";
+import { COPYFILE_EXCL } from "node:constants";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile, cp, mkdir, rm } from "node:fs/promises";
+import {
+  cp,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = await mkdtemp(join(tmpdir(), "misofm-codec-packed-"));
 const peers = ["4.0.0-rc.112", "4.0.0-rc.115"];
 const receipts = [];
+const packSource = process.env.CODEC_PACK_SOURCE;
+const expectedSha256 = process.env.CODEC_PACK_EXPECTED_SHA256;
+const destination = process.env.CODEC_PACK_DESTINATION
+  ? resolve(process.env.CODEC_PACK_DESTINATION)
+  : undefined;
+const isWithin = (parent, target) => {
+  const fromParent = relative(parent, target);
+  return (
+    fromParent === "" ||
+    (!isAbsolute(fromParent) &&
+      fromParent !== ".." &&
+      !fromParent.startsWith(`..${sep}`))
+  );
+};
 const run = (command, args, cwd) => {
   const result = spawnSync(command, args, {
     cwd,
@@ -24,10 +50,65 @@ const run = (command, args, cwd) => {
 };
 
 try {
-  run("bun", ["run", "build"], root);
+  if (expectedSha256 && !/^[0-9a-f]{64}$/.test(expectedSha256)) {
+    throw new Error(
+      "CODEC_PACK_EXPECTED_SHA256 must be 64 lowercase hex digits",
+    );
+  }
+  if (destination) {
+    const [rootPath, destinationPath, destinationStat] = await Promise.all([
+      realpath(root),
+      realpath(destination),
+      stat(destination),
+    ]);
+    if (!destinationStat.isDirectory() || isWithin(rootPath, destinationPath)) {
+      throw new Error(
+        "CODEC_PACK_DESTINATION must be an existing directory outside the repository",
+      );
+    }
+    if ((await readdir(destinationPath)).length !== 0) {
+      throw new Error("CODEC_PACK_DESTINATION must be empty");
+    }
+    if (process.env.CODEC_PACK_RECEIPT) {
+      const receiptPath = resolve(process.env.CODEC_PACK_RECEIPT);
+      const receiptDirectory = await realpath(dirname(receiptPath));
+      if (isWithin(destinationPath, receiptDirectory)) {
+        throw new Error(
+          "CODEC_PACK_RECEIPT must be outside CODEC_PACK_DESTINATION",
+        );
+      }
+    }
+  }
+
+  if (!packSource) run("bun", ["run", "build"], root);
   const [packed] = JSON.parse(
-    run("npm", ["pack", "--json", "--pack-destination", scratch], root),
+    run(
+      "npm",
+      [
+        "pack",
+        packSource ?? root,
+        "--json",
+        "--ignore-scripts",
+        "--pack-destination",
+        scratch,
+      ],
+      root,
+    ),
   );
+  if (!packed?.filename || !Array.isArray(packed.files)) {
+    throw new Error("npm pack did not return one complete package description");
+  }
+  const expectedPackage = JSON.parse(
+    await readFile(join(root, "package.json"), "utf8"),
+  );
+  if (
+    packed.name !== expectedPackage.name ||
+    packed.version !== expectedPackage.version
+  ) {
+    throw new Error(
+      `packed identity ${packed.name}@${packed.version} does not match ${expectedPackage.name}@${expectedPackage.version}`,
+    );
+  }
   const names = packed.files.map((file) => file.path);
   for (const required of [
     "dist/index.js",
@@ -52,9 +133,32 @@ try {
     }
   }
   const tarball = join(scratch, packed.filename);
-  const hash = createHash("sha256")
-    .update(await readFile(tarball))
-    .digest("hex");
+  const tarballBytes = await readFile(tarball);
+  const hash = createHash("sha256").update(tarballBytes).digest("hex");
+  const integrity = `sha512-${createHash("sha512")
+    .update(tarballBytes)
+    .digest("base64")}`;
+  if (packed.integrity && packed.integrity !== integrity) {
+    throw new Error(
+      `npm pack integrity ${packed.integrity} does not match computed ${integrity}`,
+    );
+  }
+  if (expectedSha256 && expectedSha256 !== hash) {
+    throw new Error(
+      `packed tarball SHA-256 ${hash} does not match expected ${expectedSha256}`,
+    );
+  }
+  const packedManifest = JSON.parse(
+    run("tar", ["-xOf", tarball, "package/package.json"], root),
+  );
+  if (
+    packedManifest.name !== expectedPackage.name ||
+    packedManifest.version !== expectedPackage.version ||
+    packedManifest.repository?.type !== expectedPackage.repository.type ||
+    packedManifest.repository?.url !== expectedPackage.repository.url
+  ) {
+    throw new Error("packed package manifest has an unexpected identity");
+  }
   for (const peer of peers) {
     const directory = join(scratch, peer);
     await mkdir(directory);
@@ -137,7 +241,9 @@ try {
     );
   }
   const report = {
+    tarballFilename: packed.filename,
     tarballSha256: hash,
+    tarballIntegrity: integrity,
     packedBytes: packed.size,
     unpackedBytes: packed.unpackedSize,
     files: names,
@@ -148,6 +254,17 @@ try {
       resolve(process.env.CODEC_PACK_RECEIPT),
       `${JSON.stringify(report, null, 2)}\n`,
     );
+  }
+  if (destination) {
+    const retainedTarball = join(destination, packed.filename);
+    await copyFile(tarball, retainedTarball, COPYFILE_EXCL);
+    const retainedHash = createHash("sha256")
+      .update(await readFile(retainedTarball))
+      .digest("hex");
+    if (retainedHash !== hash) {
+      await rm(retainedTarball, { force: true });
+      throw new Error("retained tarball differs from the tested tarball");
+    }
   }
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 } finally {
