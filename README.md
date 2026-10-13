@@ -8,11 +8,15 @@ files, media pipelines, delivery chunks, manifests, storage, and publication.
 See [package boundaries](docs/architecture.md) and the
 [engine web adapter integration contract](docs/adapter-integration.md).
 
-Install the package with a supported Effect peer:
+Install the package with a supported stable Effect peer (`>=4.0.3 <4.1`), and
+pin the whole Effect release train you use to one exact version:
 
 ```sh
-bun add @misofm/codec effect@4.0.0-rc.115
+bun add @misofm/codec effect@4.0.4
 ```
+
+See the [changelog](CHANGELOG.md) for the migration from 0.1.x (Effect release
+candidates).
 
 ## Encoding
 
@@ -138,8 +142,8 @@ repository and uses the resulting CLI only as a test oracle:
 CODEC_NATIVE_FLAC=$(scripts/build-native-flac.sh) bun run test:integration
 ```
 
-The supported peer matrix is `effect@4.0.0-rc.112` and `4.0.0-rc.115`; development
-pins rc.115. Packed consumer checks execute real incremental encoding, decoding,
+The supported peer range is `effect >=4.0.3 <4.1`; the packed-consumer matrix
+runs `effect@4.0.3` and `4.0.4`, and development pins `4.0.4`. Packed consumer checks execute real incremental encoding, decoding,
 round trips, cancellation, and typed truncation failures on Bun 1.4.2, Node
 22.23.2, and Chromium, Firefox, and WebKit workers. Consumer examples are compiled from an isolated
 installed tarball, without workspace aliases.
