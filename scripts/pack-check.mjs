@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = await mkdtemp(join(tmpdir(), "misofm-codec-packed-"));
-const peers = ["4.0.0-rc.112", "4.0.0-rc.115"];
+const peers = ["4.0.3", "4.0.4"];
 const receipts = [];
 const packSource = process.env.CODEC_PACK_SOURCE;
 const expectedSha256 = process.env.CODEC_PACK_EXPECTED_SHA256;
@@ -117,6 +117,7 @@ try {
     "wasm/flac-encoder.wasm",
     "wasm/flac-decoder.wasm",
     "THIRD_PARTY_NOTICES.md",
+    "CHANGELOG.md",
     "docs/architecture.md",
     "docs/adapter-integration.md",
     "vendor/licenses/libFLAC.txt",
