@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "dist.integrity": "sha512-nbhiEKPBElcwB4sc57McQLWh/1hdXLgPH2W2Dz2qU3luxiiNXtCwbCU/BunGuTrRNVudnrJod8rITv5ksUmqGA==",
+  "tarballSha256": "dcc058497b59187528703b4b2dba9b2ea09a4d6604754bbf23a4c6502c88e999",
+  "workflow": "https://github.com/misofm/codec/actions/runs/38429325908",
+  "workflowNote": "mode=publish: qualify succeeded and `npm publish` succeeded with signed provenance; the job's post-publish convergence check failed only because the registry took more than two minutes to list the version, so registry-consumer was skipped.",
+  "verifyWorkflow": "https://github.com/misofm/codec/actions/runs/38430320099",
+  "verifyWorkflowNote": "mode=verify at the same commit: qualify, publish-or-compare and registry-consumer all succeeded against the published tarball; read-only, so it does not itself claim an OIDC publication.",
+  "sourceRevision": "56383ab56c2a389a6856b27d8207695f6153c0fe",
+  "release": "https://github.com/misofm/codec/releases/tag/v0.2.0",
+  "decoderSha256": "70caf38185675dff89498e89f98171d49ec6f143a56c6895088d93c35e2018cd"
+}
