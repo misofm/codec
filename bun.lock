@@ -13,7 +13,7 @@
         "typescript": "5.9.3",
       },
       "peerDependencies": {
-        "effect": "4.0.0-rc.112 || 4.0.0-rc.115",
+        "effect": ">=4.0.3 <4.1",
       },
     },
   },
