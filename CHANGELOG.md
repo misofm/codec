@@ -2,6 +2,79 @@
 
 All notable changes to `@misofm/codec`, newest first.
 
+## 0.2.1
+
+Encoding in browsers is about four times faster. The public API, declarations,
+Wasm assets, encoded bytes, and error `reason`/`phase` codes are unchanged, so
+this is a patch release.
+
+### Fixed
+
+- **The encoder no longer yields to the scheduler after every 4,096-frame block.**
+  Effect's default scheduler yields with `setImmediate` where the host has it,
+  and with `setTimeout(0)` in browsers and workers. Browsers clamp nested timers
+  to at least 4 ms, so a 4-minute 48 kHz stereo encode (2,813 blocks) spent
+  seconds waiting on timers. The encoder now relies on the fiber runtime's
+  operation budget (`Scheduler.MaxOpsBeforeYield`). It also yields at least once
+  per 100 ms of encoding, measured with `Clock.monotonicTimeNanos`, through the
+  caller's own `Scheduler` and `Clock`. Measured with `scripts/throughput.mjs`
+  (synthetic 4-minute 24-bit stereo, in memory, default scheduler, three to
+  five rounds):
+
+  | Runtime                | 0.2.0 encode | 0.2.1 encode | Scheduler dispatches |
+  | ---------------------- | ------------ | ------------ | -------------------- |
+  | Chromium 151 worker    | 16.5–17.7 s  | 4.33 s       | 2,813 → 41           |
+  | WebKit 26.5 worker     | 17.9–19.9 s  | 4.87 s       | 2,813 → 46           |
+  | Firefox 153 worker[^1] | 42.3–42.7 s  | 32.1 s       | 2,813 → 288          |
+  | Node 22.23.2           | 4.07 s       | 4.05 s       | 2,813 → 40           |
+
+  [^1]:
+      Headless Firefox runs this Wasm slowly on the measuring host. With a
+      `MessageChannel` scheduler it takes 30.3–30.5 s under both versions.
+
+  Browser consumers no longer need a custom `MessageChannel` scheduler for
+  throughput. Decoding never yielded per block. It is unchanged and costs 35
+  dispatches per track.
+
+### Behaviour changes
+
+- **The thread is held for longer between scheduler handoffs.** Before, the
+  encoder let other fibers, timers, and interruption run after every block,
+  roughly every 1.5 ms on the measuring host. During a fully synchronous encode
+  (an in-memory source and sink), the longest interval without a handoff is now
+  about 100–135 ms on that host. The 100 ms slice also bounds it on slower
+  devices. Asynchronous source or sink waits still yield as before. To hand off
+  more often on a UI thread, lower `Scheduler.MaxOpsBeforeYield`, or run the
+  codec in a worker as before. See "Scheduling" in the README.
+- Failure details for malformed or tampered Wasm assets are more accurate.
+  Oversize and SHA-256-mismatch assets now say so; before, every case said
+  "WebAssembly.compile rejected the asset". Decoder instantiation now names the
+  failed check. These failures carry no `cause`. Only `detail` strings changed.
+- The decoder now rejects an Asyncify stack allocation with a negative or
+  out-of-range pointer, not only a null one (`wasm-instantiate`). It no longer
+  calls `codec_decoder_delete` on an invalid non-zero decoder pointer. Decoder
+  Wasm instantiation is now an uninterruptible `acquireRelease` acquisition.
+  These paths are unreachable with the pinned assets.
+
+### Internal
+
+- Wasm resources are owned by Effect scopes: `acquireRelease` for the decoder ABI
+  and libFLAC decoder (into the stream's resource scope), one idempotent
+  release for the encoder, and typed `Effect.fail` validation instead of
+  exceptions thrown inside `Effect.try`. Asset loading for both codecs shares one
+  pinned-Wasm compile helper.
+- New `test/scheduling.test.ts` fails if per-block scheduler yields return. New
+  `test/wasm-lifecycle.test.ts` covers asset failure details and Wasm release on
+  success, failure, and interruption. `scripts/throughput.mjs` measures Node,
+  Bun, and browser workers.
+
+### Release automation
+
+- A push to `main` now runs `npm-publish.yml`. It publishes through npm trusted
+  publishing (OIDC) only when the exact `package.json` version is absent from the
+  registry, after the full qualification gates. Manual dispatch is unchanged. The
+  workflow filename is unchanged, so the npm trusted publisher needs no update.
+
 ## 0.2.0
 
 Moves the package from Effect release candidates (`4.0.0-rc.112 || 4.0.0-rc.115`)

@@ -129,8 +129,9 @@ The codec does not install a scheduler. With fully synchronous input and output
 only when the runtime's operation budget (`Scheduler.MaxOpsBeforeYield`, 2,048 by
 default) is spent. The encoder also yields at least once per 100 ms of encoding.
 Interruption, timers, and other fibers on the same thread wait for the next
-handoff. On a desktop CPU in 0.2.1 this measured at most about 120 ms for
-encoding and 45 ms for decoding.
+handoff. On one desktop host (0.2.1, `scripts/throughput.mjs`), the longest
+wait measured 100–135 ms while encoding. While decoding it was typically
+15–90 ms, with occasional outliers up to 141 ms.
 
 Up to 0.2.0 the encoder yielded after every 4,096-frame block. In browsers,
 Effect's default scheduler yields with `setTimeout(0)`, which is clamped to at
