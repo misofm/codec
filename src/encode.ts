@@ -343,26 +343,143 @@ const validateBlock = (
   return Effect.succeed(blockFrames);
 };
 
+type EncoderPhase = "init" | "process" | "finish";
+
+const NATIVE_FAILURE_REASON = {
+  init: "encoder-init",
+  process: "encoder-process",
+  finish: "encoder-finish",
+} as const;
+
+const encoderTrap = (
+  phase: EncoderPhase,
+  detail: string,
+  cause: unknown,
+): FlacEncodeError =>
+  new FlacEncodeError({ reason: "wasm-trap", phase, detail, cause });
+
 const nativeFailure = (
-  abi: EncoderAbi,
-  encoder: number,
-  reason: "encoder-init" | "encoder-process" | "encoder-finish",
-  phase: "init" | "process" | "finish",
+  resource: EncoderResource,
+  phase: EncoderPhase,
 ): FlacEncodeError => {
   let nativeState: number | undefined;
   try {
-    nativeState = abi.exports.codec_encoder_state(encoder);
+    nativeState = resource.abi.exports.codec_encoder_state(resource.encoder);
   } catch {
     // The primary operation already failed; state is diagnostic only.
   }
   return new FlacEncodeError({
-    reason,
+    reason: NATIVE_FAILURE_REASON[phase],
     phase,
     detail: `libFLAC ${phase} returned failure`,
     ...(nativeState === undefined ? {} : { nativeState }),
   });
 };
 
+/**
+ * Make one bounded libFLAC call and collect the output it staged. Fails with the
+ * first callback error, then a trap, then a native status other than `success`.
+ */
+const callEncoder = (
+  resource: EncoderResource,
+  phase: EncoderPhase,
+  success: number,
+  trapDetail: string,
+  call: (exports: EncoderAbi["exports"], encoder: number) => number,
+): Effect.Effect<ReadonlyArray<StagedWrite>, FlacEncodeError> =>
+  Effect.try({
+    try: () => {
+      resource.abi.beginCall();
+      const status = call(resource.abi.exports, resource.encoder);
+      return { status, batch: resource.abi.endCall() };
+    },
+    catch: (cause) => encoderTrap(phase, trapDetail, cause),
+  }).pipe(
+    Effect.flatMap(({ status, batch }) =>
+      batch.error !== undefined
+        ? Effect.fail(batch.error)
+        : status !== success
+          ? Effect.fail(nativeFailure(resource, phase))
+          : Effect.succeed(batch.writes),
+    ),
+  );
+
+const createEncoder = (
+  abi: EncoderAbi,
+  format: PcmFormat,
+): Effect.Effect<EncoderResource, FlacEncodeError> =>
+  Effect.gen(function* () {
+    const inputBytes =
+      FLAC_ENCODER_LIMITS.maxInputBlockFrames *
+      format.channels *
+      Int32Array.BYTES_PER_ELEMENT;
+    const { encoder, memoryBytes } = yield* Effect.try({
+      try: () => {
+        abi.beginCall();
+        return {
+          memoryBytes: abi.exports.memory.buffer.byteLength,
+          encoder: abi.exports.codec_encoder_new(
+            format.sampleRate,
+            format.channels,
+            format.bitsPerSample,
+            FLAC_ENCODER_LIMITS.compressionLevel,
+            FLAC_ENCODER_LIMITS.encoderBlockFrames,
+          ),
+        };
+      },
+      catch: (cause) =>
+        encoderTrap("init", "encoder allocation trapped", cause),
+    });
+    if (
+      !Number.isSafeInteger(encoder) ||
+      encoder <= 0 ||
+      encoder % 4 !== 0 ||
+      encoder >= memoryBytes
+    ) {
+      return yield* new FlacEncodeError({
+        reason: encoder === 0 ? "encoder-create" : "wasm-abi",
+        phase: "init",
+        detail:
+          encoder === 0
+            ? "libFLAC could not allocate/configure an encoder"
+            : "encoder returned an invalid state pointer",
+      });
+    }
+    const input = yield* Effect.try({
+      try: () => abi.exports.malloc(inputBytes),
+      catch: (cause) =>
+        encoderTrap("init", "encoder allocation trapped", cause),
+    });
+    if (
+      !Number.isSafeInteger(input) ||
+      input <= 0 ||
+      input % Int32Array.BYTES_PER_ELEMENT !== 0 ||
+      input > memoryBytes - inputBytes
+    ) {
+      // The invalid allocation is the primary typed failure.
+      yield* Effect.ignore(
+        Effect.try({
+          try: () => abi.exports.codec_encoder_delete(encoder),
+          catch: (cause) => cause,
+        }),
+      );
+      return yield* new FlacEncodeError({
+        reason: input === 0 ? "allocation-failed" : "wasm-abi",
+        phase: "init",
+        detail:
+          input === 0
+            ? "Wasm could not allocate the bounded PCM input buffer"
+            : "encoder returned an invalid PCM input pointer",
+      });
+    }
+    return { abi, encoder, input, released: false };
+  });
+
+/**
+ * Free the PCM input buffer and delete the encoder once. Both are attempted;
+ * the first trap is reported. A successful encode surfaces it, while the scope
+ * finalizer ignores it because a primary failure or interruption already exists.
+ */
 const releaseEncoder = (
   resource: EncoderResource,
 ): Effect.Effect<void, FlacEncodeError> =>
@@ -387,12 +504,11 @@ const releaseEncoder = (
       if (trapped) throw firstCause;
     },
     catch: (cause) =>
-      new FlacEncodeError({
-        reason: "wasm-trap",
-        phase: "finish",
-        detail: "encoder cleanup trapped after successful finalization",
+      encoderTrap(
+        "finish",
+        "encoder cleanup trapped after successful finalization",
         cause,
-      }),
+      ),
   });
 
 /**
@@ -473,106 +589,19 @@ export const encodeFlac = <EI, RI, EO, RO>(
         );
 
       const resource = yield* Effect.acquireRelease(
-        Effect.try({
-          try: (): EncoderResource => {
-            abi.beginCall();
-            const memoryBytes = abi.exports.memory.buffer.byteLength;
-            const encoder = abi.exports.codec_encoder_new(
-              format.sampleRate,
-              format.channels,
-              format.bitsPerSample,
-              FLAC_ENCODER_LIMITS.compressionLevel,
-              FLAC_ENCODER_LIMITS.encoderBlockFrames,
-            );
-            if (
-              !Number.isSafeInteger(encoder) ||
-              encoder <= 0 ||
-              encoder % 4 !== 0 ||
-              encoder >= memoryBytes
-            )
-              throw new FlacEncodeError({
-                reason: encoder === 0 ? "encoder-create" : "wasm-abi",
-                phase: "init",
-                detail:
-                  encoder === 0
-                    ? "libFLAC could not allocate/configure an encoder"
-                    : "encoder returned an invalid state pointer",
-              });
-            const inputBytes =
-              FLAC_ENCODER_LIMITS.maxInputBlockFrames *
-              format.channels *
-              Int32Array.BYTES_PER_ELEMENT;
-            const input = abi.exports.malloc(inputBytes);
-            if (
-              !Number.isSafeInteger(input) ||
-              input <= 0 ||
-              input % Int32Array.BYTES_PER_ELEMENT !== 0 ||
-              input > memoryBytes - inputBytes
-            ) {
-              try {
-                abi.exports.codec_encoder_delete(encoder);
-              } catch {
-                // The invalid allocation is the primary typed failure.
-              }
-              throw new FlacEncodeError({
-                reason: input === 0 ? "allocation-failed" : "wasm-abi",
-                phase: "init",
-                detail:
-                  input === 0
-                    ? "Wasm could not allocate the bounded PCM input buffer"
-                    : "encoder returned an invalid PCM input pointer",
-              });
-            }
-            return { abi, encoder, input, released: false };
-          },
-          catch: (cause) =>
-            cause instanceof FlacEncodeError
-              ? cause
-              : new FlacEncodeError({
-                  reason: "wasm-trap",
-                  phase: "init",
-                  detail: "encoder allocation trapped",
-                  cause,
-                }),
-        }),
-        (owned) =>
-          Effect.sync(() => {
-            if (owned.released) return;
-            owned.released = true;
-            try {
-              owned.abi.exports.free(owned.input);
-            } catch {
-              // Finalization is best-effort for a caller-supplied malformed ABI.
-            }
-            try {
-              owned.abi.exports.codec_encoder_delete(owned.encoder);
-            } catch {
-              // Finalization is best-effort for a caller-supplied malformed ABI.
-            }
-          }),
+        createEncoder(abi, format),
+        (owned) => Effect.ignore(releaseEncoder(owned)),
       );
 
-      resource.abi.beginCall();
-      const initStatus = yield* Effect.try({
-        try: () => resource.abi.exports.codec_encoder_init(resource.encoder),
-        catch: (cause) =>
-          new FlacEncodeError({
-            reason: "wasm-trap",
-            phase: "init",
-            detail: "encoder initialization trapped",
-            cause,
-          }),
-      });
-      const initBatch = resource.abi.endCall();
-      if (initBatch.error !== undefined) return yield* initBatch.error;
-      if (initStatus !== 0)
-        return yield* nativeFailure(
-          resource.abi,
-          resource.encoder,
-          "encoder-init",
+      yield* drainWrites(
+        yield* callEncoder(
+          resource,
           "init",
-        );
-      yield* drainWrites(initBatch.writes);
+          0,
+          "encoder initialization trapped",
+          (exports, encoder) => exports.codec_encoder_init(encoder),
+        ),
+      );
 
       let frames = 0n;
       let blockIndex = 0;
@@ -601,33 +630,20 @@ export const encodeFlac = <EI, RI, EO, RO>(
                 cause,
               }),
           });
-          resource.abi.beginCall();
-          const processStatus = yield* Effect.try({
-            try: () =>
-              resource.abi.exports.codec_encoder_process_interleaved(
-                resource.encoder,
-                resource.input,
-                blockFrames,
-              ),
-            catch: (cause) =>
-              new FlacEncodeError({
-                reason: "wasm-trap",
-                phase: "process",
-                detail: `encoder process call ${blockIndex} trapped`,
-                cause,
-              }),
-          });
-          const batch = resource.abi.endCall();
-          if (batch.error !== undefined) return yield* batch.error;
-          if (processStatus !== 1) {
-            return yield* nativeFailure(
-              resource.abi,
-              resource.encoder,
-              "encoder-process",
+          yield* drainWrites(
+            yield* callEncoder(
+              resource,
               "process",
-            );
-          }
-          yield* drainWrites(batch.writes);
+              1,
+              `encoder process call ${blockIndex} trapped`,
+              (exports, encoder) =>
+                exports.codec_encoder_process_interleaved(
+                  encoder,
+                  resource.input,
+                  blockFrames,
+                ),
+            ),
+          );
           frames += BigInt(blockFrames);
           blockIndex += 1;
           const now = yield* Clock.monotonicTimeNanos;
@@ -647,28 +663,15 @@ export const encodeFlac = <EI, RI, EO, RO>(
         });
       }
 
-      resource.abi.beginCall();
-      const finishStatus = yield* Effect.try({
-        try: () => resource.abi.exports.codec_encoder_finish(resource.encoder),
-        catch: (cause) =>
-          new FlacEncodeError({
-            reason: "wasm-trap",
-            phase: "finish",
-            detail: "encoder finish trapped",
-            cause,
-          }),
-      });
-      const finishBatch = resource.abi.endCall();
-      if (finishBatch.error !== undefined) return yield* finishBatch.error;
-      if (finishStatus !== 1) {
-        return yield* nativeFailure(
-          resource.abi,
-          resource.encoder,
-          "encoder-finish",
+      yield* drainWrites(
+        yield* callEncoder(
+          resource,
           "finish",
-        );
-      }
-      yield* drainWrites(finishBatch.writes);
+          1,
+          "encoder finish trapped",
+          (exports, encoder) => exports.codec_encoder_finish(encoder),
+        ),
+      );
       const streamInfo = yield* parseStreamInfo(
         metadataPrefix,
         metadataPrefixPresent,

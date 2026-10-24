@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
 
 import { FlacDecodeError } from "../decoder-errors.js";
 import { FLAC_DECODER_LIMITS } from "../decoder-wasm.js";
@@ -126,196 +127,254 @@ export interface DecoderAbi {
   readonly dispose: () => void;
 }
 
+const instantiateError = (detail: string, cause?: unknown): FlacDecodeError =>
+  wasmError("wasm-instantiate", "instantiate", detail, cause);
+
+const validateExports = (
+  raw: WebAssembly.Exports,
+): Effect.Effect<DecoderExports, FlacDecodeError> =>
+  Effect.gen(function* () {
+    for (const name of REQUIRED_EXPORTS) {
+      if (!(name in raw))
+        return yield* instantiateError(`missing decoder Wasm export: ${name}`);
+      if (name !== "memory" && typeof raw[name] !== "function") {
+        return yield* instantiateError(
+          `decoder Wasm export is not a function: ${name}`,
+        );
+      }
+    }
+    // Every required function export is checked above.
+    const exports = raw as DecoderExports;
+    const memory = exports.memory;
+    if (!(memory instanceof WebAssembly.Memory)) {
+      return yield* instantiateError(
+        "decoder memory export is not WebAssembly.Memory",
+      );
+    }
+    const abiVersion = yield* Effect.try({
+      try: () => exports.codec_decoder_abi_version(),
+      catch: (cause) =>
+        instantiateError("decoder Wasm trapped while reporting its ABI", cause),
+    });
+    if (abiVersion !== 1) {
+      return yield* instantiateError(`unsupported decoder ABI ${abiVersion}`);
+    }
+    if (memory.buffer.byteLength !== FLAC_DECODER_LIMITS.wasmMemoryBytes) {
+      return yield* instantiateError(
+        `decoder memory is ${memory.buffer.byteLength} bytes; expected ${FLAC_DECODER_LIMITS.wasmMemoryBytes}`,
+      );
+    }
+    if (
+      typeof SharedArrayBuffer !== "undefined" &&
+      memory.buffer instanceof SharedArrayBuffer
+    ) {
+      return yield* instantiateError("decoder memory must be non-shared");
+    }
+    if (growsMemory(memory)) {
+      return yield* instantiateError("decoder memory is growable");
+    }
+    return exports;
+  });
+
+// Fixed memory rejects growth; any exception counts as a refusal.
+const growsMemory = (memory: WebAssembly.Memory): boolean => {
+  try {
+    memory.grow(1);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Allocate and describe the Asyncify data/stack region; returns its pointer. */
+const allocateAsyncifyStack = (
+  exports: DecoderExports,
+): Effect.Effect<number, FlacDecodeError> =>
+  Effect.try({
+    try: () =>
+      exports.malloc(
+        ASYNCIFY_DATA_BYTES + FLAC_DECODER_LIMITS.asyncifyStackBytes,
+      ),
+    catch: (cause) =>
+      instantiateError(
+        "decoder Wasm trapped while allocating the Asyncify stack",
+        cause,
+      ),
+  }).pipe(
+    Effect.flatMap((pointer) => {
+      const allocationBytes =
+        ASYNCIFY_DATA_BYTES + FLAC_DECODER_LIMITS.asyncifyStackBytes;
+      if (
+        !Number.isSafeInteger(pointer) ||
+        pointer <= 0 ||
+        pointer > exports.memory.buffer.byteLength - allocationBytes
+      ) {
+        return Effect.fail(
+          instantiateError("could not allocate the Asyncify stack"),
+        );
+      }
+      const stackStart = pointer + ASYNCIFY_DATA_BYTES;
+      const data = new DataView(exports.memory.buffer);
+      data.setUint32(pointer, stackStart, true);
+      data.setUint32(
+        pointer + 4,
+        stackStart + FLAC_DECODER_LIMITS.asyncifyStackBytes,
+        true,
+      );
+      return Effect.succeed(pointer);
+    }),
+  );
+
 /**
  * Instantiate one fixed-memory decoder. The only suspension point is the
  * imported synchronous read callback; `invoke` moves that suspension into the
  * caller's Effect pull without owning or nesting a runtime.
+ *
+ * The caller owns `dispose`, which frees the Asyncify stack; prefer
+ * `acquireDecoderAbi`, which registers it with the current scope.
  */
 export const instantiateDecoder = (
   module: WebAssembly.Module,
 ): Effect.Effect<DecoderAbi, FlacDecodeError> =>
-  Effect.tryPromise({
-    try: async () => {
-      let decoderExports: DecoderExports | undefined;
-      let slot: Uint8Array | undefined;
-      let slotOffset = 0;
-      let eof = false;
-      let asyncifyData = 0;
-      let disposed = false;
+  Effect.suspend(() => {
+    let decoderExports: DecoderExports | undefined;
+    let slot: Uint8Array | undefined;
+    let slotOffset = 0;
+    let eof = false;
+    let asyncifyData = 0;
+    let disposed = false;
 
-      const read = (pointer: number, maximumBytes: number): number => {
-        const exports = decoderExports;
-        if (exports === undefined)
-          throw new Error("decoder read before instantiation");
-        const state = exports.asyncify_get_state();
-        if (state === ASYNCIFY_REWINDING) exports.asyncify_stop_rewind();
-        if (state !== ASYNCIFY_NORMAL && state !== ASYNCIFY_REWINDING) {
-          throw new Error(`decoder read in invalid Asyncify state ${state}`);
+    // Foreign callback boundary: runs synchronously inside a Wasm call, so it
+    // signals failure by throwing, which surfaces as a trap from `invoke`.
+    const read = (pointer: number, maximumBytes: number): number => {
+      const exports = decoderExports;
+      if (exports === undefined)
+        throw new Error("decoder read before instantiation");
+      const state = exports.asyncify_get_state();
+      if (state === ASYNCIFY_REWINDING) exports.asyncify_stop_rewind();
+      if (state !== ASYNCIFY_NORMAL && state !== ASYNCIFY_REWINDING) {
+        throw new Error(`decoder read in invalid Asyncify state ${state}`);
+      }
+      if (slot !== undefined) {
+        if (
+          !Number.isSafeInteger(pointer) ||
+          !Number.isSafeInteger(maximumBytes) ||
+          pointer < 0 ||
+          maximumBytes <= 0 ||
+          pointer + maximumBytes > exports.memory.buffer.byteLength
+        ) {
+          throw new Error("libFLAC supplied an invalid read callback range");
         }
-        if (slot !== undefined) {
-          if (
-            !Number.isSafeInteger(pointer) ||
-            !Number.isSafeInteger(maximumBytes) ||
-            pointer < 0 ||
-            maximumBytes <= 0 ||
-            pointer + maximumBytes > exports.memory.buffer.byteLength
-          ) {
-            throw new Error("libFLAC supplied an invalid read callback range");
-          }
-          const length = Math.min(maximumBytes, slot.byteLength - slotOffset);
-          new Uint8Array(exports.memory.buffer, pointer, length).set(
-            slot.subarray(slotOffset, slotOffset + length),
-          );
-          slotOffset += length;
-          if (slotOffset === slot.byteLength) {
-            slot = undefined;
+        const length = Math.min(maximumBytes, slot.byteLength - slotOffset);
+        new Uint8Array(exports.memory.buffer, pointer, length).set(
+          slot.subarray(slotOffset, slotOffset + length),
+        );
+        slotOffset += length;
+        if (slotOffset === slot.byteLength) {
+          slot = undefined;
+          slotOffset = 0;
+        }
+        return length;
+      }
+      if (eof) return 0;
+      if (state === ASYNCIFY_REWINDING) {
+        throw new Error("decoder resumed without an input slot or EOF");
+      }
+      exports.asyncify_start_unwind(asyncifyData);
+      return -1;
+    };
+
+    const normalize = (): void => {
+      const state = decoderExports!.asyncify_get_state();
+      if (state === ASYNCIFY_UNWINDING) decoderExports!.asyncify_stop_unwind();
+      else if (state === ASYNCIFY_REWINDING)
+        decoderExports!.asyncify_stop_rewind();
+    };
+
+    const invoke = <E, R>(
+      phase: DecoderPhase,
+      call: () => number,
+      nextInput: Effect.Effect<Uint8Array | null, E, R>,
+    ): Effect.Effect<number, E | FlacDecodeError, R> =>
+      Effect.gen(function* () {
+        let rewind = false;
+        for (;;) {
+          const outcome = yield* Effect.try({
+            try: () => {
+              try {
+                if (rewind) decoderExports!.asyncify_start_rewind(asyncifyData);
+                const result = call();
+                const state = decoderExports!.asyncify_get_state();
+                if (state === ASYNCIFY_UNWINDING) {
+                  decoderExports!.asyncify_stop_unwind();
+                  return { result, suspended: true } as const;
+                }
+                if (state !== ASYNCIFY_NORMAL) {
+                  normalize();
+                  throw new Error(`decoder stopped in Asyncify state ${state}`);
+                }
+                return { result, suspended: false } as const;
+              } catch (cause) {
+                normalize();
+                throw cause;
+              }
+            },
+            catch: (cause) =>
+              wasmError(
+                "wasm-trap",
+                phase,
+                `decoder Wasm trapped during ${phase}`,
+                cause,
+              ),
+          });
+          if (!outcome.suspended) return outcome.result;
+          const input = yield* nextInput;
+          if (input === null) {
+            eof = true;
+          } else {
+            slot = input;
             slotOffset = 0;
           }
-          return length;
+          rewind = true;
         }
-        if (eof) return 0;
-        if (state === ASYNCIFY_REWINDING) {
-          throw new Error("decoder resumed without an input slot or EOF");
-        }
-        exports.asyncify_start_unwind(asyncifyData);
-        return -1;
-      };
-
-      const instance = await WebAssembly.instantiate(module, {
-        codec: { read },
       });
-      const raw = instance.exports;
-      for (const name of REQUIRED_EXPORTS) {
-        if (!(name in raw))
-          throw new Error(`missing decoder Wasm export: ${name}`);
-        if (name !== "memory" && typeof raw[name] !== "function") {
-          throw new Error(`decoder Wasm export is not a function: ${name}`);
-        }
-      }
-      decoderExports = raw as DecoderExports;
-      if (!(decoderExports.memory instanceof WebAssembly.Memory)) {
-        throw new Error("decoder memory export is not WebAssembly.Memory");
-      }
-      if (decoderExports.codec_decoder_abi_version() !== 1) {
-        throw new Error(
-          `unsupported decoder ABI ${decoderExports.codec_decoder_abi_version()}`,
-        );
-      }
-      if (
-        decoderExports.memory.buffer.byteLength !==
-        FLAC_DECODER_LIMITS.wasmMemoryBytes
-      ) {
-        throw new Error(
-          `decoder memory is ${decoderExports.memory.buffer.byteLength} bytes`,
-        );
-      }
-      if (
-        typeof SharedArrayBuffer !== "undefined" &&
-        decoderExports.memory.buffer instanceof SharedArrayBuffer
-      ) {
-        throw new Error("decoder memory must be non-shared");
-      }
-      try {
-        decoderExports.memory.grow(1);
-        throw new Error("decoder memory is growable");
-      } catch (cause) {
-        if (
-          cause instanceof Error &&
-          cause.message === "decoder memory is growable"
-        )
-          throw cause;
-      }
 
-      const allocationBytes =
-        ASYNCIFY_DATA_BYTES + FLAC_DECODER_LIMITS.asyncifyStackBytes;
-      asyncifyData = decoderExports.malloc(allocationBytes);
-      if (asyncifyData === 0)
-        throw new Error("could not allocate the Asyncify stack");
-      const stackStart = asyncifyData + ASYNCIFY_DATA_BYTES;
-      const data = new DataView(decoderExports.memory.buffer);
-      data.setUint32(asyncifyData, stackStart, true);
-      data.setUint32(
-        asyncifyData + 4,
-        stackStart + FLAC_DECODER_LIMITS.asyncifyStackBytes,
-        true,
-      );
+    const dispose = (): void => {
+      if (disposed) return;
+      disposed = true;
+      normalize();
+      if (asyncifyData !== 0) decoderExports!.free(asyncifyData);
+      asyncifyData = 0;
+      slot = undefined;
+    };
 
-      const normalize = (): void => {
-        const state = decoderExports!.asyncify_get_state();
-        if (state === ASYNCIFY_UNWINDING)
-          decoderExports!.asyncify_stop_unwind();
-        else if (state === ASYNCIFY_REWINDING)
-          decoderExports!.asyncify_stop_rewind();
-      };
-
-      const invoke = <E, R>(
-        phase: DecoderPhase,
-        call: () => number,
-        nextInput: Effect.Effect<Uint8Array | null, E, R>,
-      ): Effect.Effect<number, E | FlacDecodeError, R> =>
-        Effect.gen(function* () {
-          let rewind = false;
-          for (;;) {
-            const outcome = yield* Effect.try({
-              try: () => {
-                try {
-                  if (rewind)
-                    decoderExports!.asyncify_start_rewind(asyncifyData);
-                  const result = call();
-                  const state = decoderExports!.asyncify_get_state();
-                  if (state === ASYNCIFY_UNWINDING) {
-                    decoderExports!.asyncify_stop_unwind();
-                    return { result, suspended: true } as const;
-                  }
-                  if (state !== ASYNCIFY_NORMAL) {
-                    normalize();
-                    throw new Error(
-                      `decoder stopped in Asyncify state ${state}`,
-                    );
-                  }
-                  return { result, suspended: false } as const;
-                } catch (cause) {
-                  normalize();
-                  throw cause;
-                }
-              },
-              catch: (cause) =>
-                wasmError(
-                  "wasm-trap",
-                  phase,
-                  `decoder Wasm trapped during ${phase}`,
-                  cause,
-                ),
-            });
-            if (!outcome.suspended) return outcome.result;
-            const input = yield* nextInput;
-            if (input === null) {
-              eof = true;
-            } else {
-              slot = input;
-              slotOffset = 0;
-            }
-            rewind = true;
-          }
-        });
-
-      const dispose = (): void => {
-        if (disposed) return;
-        disposed = true;
-        normalize();
-        if (asyncifyData !== 0) decoderExports!.free(asyncifyData);
-        asyncifyData = 0;
-        slot = undefined;
-      };
-      return { exports: decoderExports, invoke, normalize, dispose };
-    },
-    catch: (cause) =>
-      cause instanceof FlacDecodeError
-        ? cause
-        : wasmError(
-            "wasm-instantiate",
-            "instantiate",
+    return Effect.gen(function* () {
+      const instance = yield* Effect.tryPromise({
+        try: () => WebAssembly.instantiate(module, { codec: { read } }),
+        catch: (cause) =>
+          instantiateError(
             "could not instantiate the decoder Wasm module",
             cause,
           ),
+      });
+      const exports = yield* validateExports(instance.exports);
+      decoderExports = exports;
+      asyncifyData = yield* allocateAsyncifyStack(exports);
+      return { exports, invoke, normalize, dispose };
+    });
   });
+
+/**
+ * Instantiate a decoder whose Asyncify stack is released when the current scope
+ * closes. Release is best-effort: a trap while releasing is ignored, because a
+ * primary result, failure, or interruption already exists. Callers that must
+ * observe cleanup traps call `dispose` themselves first; it is idempotent.
+ */
+export const acquireDecoderAbi = (
+  module: WebAssembly.Module,
+): Effect.Effect<DecoderAbi, FlacDecodeError, Scope.Scope> =>
+  Effect.acquireRelease(instantiateDecoder(module), (abi) =>
+    Effect.ignore(
+      Effect.try({ try: () => abi.dispose(), catch: (cause) => cause }),
+    ),
+  );

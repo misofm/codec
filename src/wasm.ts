@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import { FlacEncodeError } from "./errors.js";
+import { compilePinnedWasm } from "./internal/wasm-asset.js";
 
 export const FLAC_ENCODER_WASM_URL = new URL(
   "../wasm/flac-encoder.wasm",
@@ -53,71 +54,25 @@ const EXPECTED_EXPORTS = [
   "memory:memory",
 ] as const;
 
-const digestHex = (bytes: ArrayBuffer): Promise<string> =>
-  globalThis.crypto.subtle
-    .digest("SHA-256", bytes)
-    .then((digest) =>
-      Array.from(new Uint8Array(digest), (byte) =>
-        byte.toString(16).padStart(2, "0"),
-      ).join(""),
-    );
-
 const compileEncoder = (
   bytes: Uint8Array,
 ): Effect.Effect<FlacEncoderService, FlacEncodeError> =>
-  Effect.tryPromise({
-    try: async () => {
-      if (bytes.byteLength > FLAC_ENCODER_LIMITS.maxAssetBytes) {
-        throw new Error(
-          `encoder asset is ${bytes.byteLength} bytes; maximum is ${FLAC_ENCODER_LIMITS.maxAssetBytes}`,
-        );
-      }
-      const owned = new Uint8Array(bytes.byteLength);
-      owned.set(bytes);
-      const hash = await digestHex(owned.buffer);
-      if (hash !== FLAC_ENCODER_WASM_SHA256) {
-        throw new Error(
-          `encoder asset SHA-256 ${hash} does not match pinned ${FLAC_ENCODER_WASM_SHA256}`,
-        );
-      }
-      return WebAssembly.compile(owned.buffer);
-    },
-    catch: (cause) =>
+  compilePinnedWasm(bytes, {
+    label: "encoder",
+    maxBytes: FLAC_ENCODER_LIMITS.maxAssetBytes,
+    sha256: FLAC_ENCODER_WASM_SHA256,
+    expectedImports: EXPECTED_IMPORTS,
+    expectedExports: EXPECTED_EXPORTS,
+    compileError: (detail, cause) =>
       new FlacEncodeError({
         reason: "wasm-compile",
         phase: "load",
-        detail: "WebAssembly.compile rejected the encoder asset",
-        cause,
+        detail,
+        ...(cause === undefined ? {} : { cause }),
       }),
-  }).pipe(
-    Effect.flatMap((module) => {
-      const imports = WebAssembly.Module.imports(module)
-        .map(({ module, name, kind }) => `${module}.${name}:${kind}`)
-        .sort();
-      if (JSON.stringify(imports) !== JSON.stringify(EXPECTED_IMPORTS)) {
-        return Effect.fail(
-          new FlacEncodeError({
-            reason: "wasm-abi",
-            phase: "load",
-            detail: `unexpected encoder imports: ${imports.join(", ")}`,
-          }),
-        );
-      }
-      const exports = WebAssembly.Module.exports(module)
-        .map(({ name, kind }) => `${name}:${kind}`)
-        .sort();
-      if (JSON.stringify(exports) !== JSON.stringify(EXPECTED_EXPORTS)) {
-        return Effect.fail(
-          new FlacEncodeError({
-            reason: "wasm-abi",
-            phase: "load",
-            detail: `unexpected encoder exports: ${exports.join(", ")}`,
-          }),
-        );
-      }
-      return Effect.succeed({ module });
-    }),
-  );
+    abiError: (detail) =>
+      new FlacEncodeError({ reason: "wasm-abi", phase: "load", detail }),
+  }).pipe(Effect.map((module) => ({ module })));
 
 /** Compile and validate trusted encoder Wasm bytes once for a Layer lifetime. */
 export const makeFlacEncoderLayer = (

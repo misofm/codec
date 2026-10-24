@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Pull from "effect/Pull";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -8,7 +9,7 @@ import * as Stream from "effect/Stream";
 import { FlacDecodeError } from "./decoder-errors.js";
 import { PcmFormat } from "./format.js";
 import {
-  instantiateDecoder,
+  acquireDecoderAbi,
   type DecoderAbi,
   type DecoderPhase,
 } from "./internal/decoder-abi.js";
@@ -63,6 +64,7 @@ interface CheckedOptions {
 interface DecoderResource {
   readonly abi: DecoderAbi;
   readonly decoder: number;
+  deleted: boolean;
 }
 
 const invalidOptions = (detail: string): FlacDecodeError =>
@@ -207,6 +209,92 @@ const decoderFailure = (
   });
 };
 
+const createDecoder = (
+  abi: DecoderAbi,
+  options: CheckedOptions,
+): Effect.Effect<DecoderResource, FlacDecodeError> =>
+  Effect.gen(function* () {
+    const expectedFrames = options.expectedFrames ?? 0n;
+    const expectedFormat = options.expectedFormat;
+    const decoder = yield* abiOperation(
+      "instantiate",
+      "decoder Wasm trapped while allocating libFLAC state",
+      () =>
+        abi.exports.codec_decoder_new(
+          options.maxMetadataBytes,
+          expectedFormat?.sampleRate ?? 0,
+          expectedFormat?.channels ?? 0,
+          expectedFormat?.bitsPerSample ?? 0,
+          low32(expectedFrames),
+          high32(expectedFrames),
+          expectedFormat === undefined ? 0 : 1,
+          options.expectedFrames === undefined ? 0 : 1,
+        ),
+    );
+    if (
+      !Number.isSafeInteger(decoder) ||
+      decoder <= 0 ||
+      decoder >= abi.exports.memory.buffer.byteLength
+    ) {
+      return yield* new FlacDecodeError({
+        reason: "allocation-failed",
+        phase: "instantiate",
+        detail: "could not allocate the fixed-memory libFLAC decoder",
+      });
+    }
+    return { abi, decoder, deleted: false };
+  });
+
+const cleanupTrap = (cause: unknown): FlacDecodeError =>
+  new FlacDecodeError({
+    reason: "wasm-trap",
+    phase: "finish",
+    detail: "decoder cleanup trapped after successful verification",
+    cause,
+  });
+
+/** Leave any Asyncify state and delete the libFLAC decoder, once. */
+const deleteDecoder = (
+  resource: DecoderResource,
+): Effect.Effect<void, FlacDecodeError> =>
+  Effect.try({
+    try: () => {
+      if (resource.deleted) return;
+      resource.deleted = true;
+      let trapped = false;
+      let firstCause: unknown;
+      try {
+        resource.abi.normalize();
+      } catch (cause) {
+        trapped = true;
+        firstCause = cause;
+      }
+      try {
+        resource.abi.exports.codec_decoder_delete(resource.decoder);
+      } catch (cause) {
+        if (!trapped) firstCause = cause;
+        trapped = true;
+      }
+      if (trapped) throw firstCause;
+    },
+    catch: cleanupTrap,
+  });
+
+/**
+ * Release the decoder and its Asyncify stack after a verified decode, reporting
+ * the first cleanup trap. The scope finalizers then have nothing left to do.
+ */
+const releaseDecoder = (
+  resource: DecoderResource,
+): Effect.Effect<void, FlacDecodeError> =>
+  Effect.gen(function* () {
+    const deleted = yield* Effect.exit(deleteDecoder(resource));
+    const disposed = yield* Effect.exit(
+      Effect.try({ try: () => resource.abi.dispose(), catch: cleanupTrap }),
+    );
+    yield* Exit.isFailure(deleted) ? deleted : disposed;
+  });
+
 const makeDecodeStream = <E, R>(
   input: Stream.Stream<Uint8Array, E, R>,
   options: CheckedOptions,
@@ -216,69 +304,17 @@ const makeDecodeStream = <E, R>(
     (inputPull, _scope, resourceScope) =>
       Effect.gen(function* () {
         const service = yield* FlacDecoder;
-        const abi = yield* instantiateDecoder(service.module);
-        let decoder = 0;
-        let released = false;
-        const releaseDecoder = (): void => {
-          if (released) return;
-          released = true;
-          let trapped = false;
-          let firstCause: unknown;
-          const attempt = (operation: () => void): void => {
-            try {
-              operation();
-            } catch (cause) {
-              if (!trapped) firstCause = cause;
-              trapped = true;
-            }
-          };
-          attempt(() => abi.normalize());
-          const ownedDecoder = decoder;
-          decoder = 0;
-          if (ownedDecoder !== 0)
-            attempt(() => abi.exports.codec_decoder_delete(ownedDecoder));
-          attempt(() => abi.dispose());
-          if (trapped) throw firstCause;
-        };
-        yield* Scope.addFinalizer(
-          resourceScope,
-          Effect.sync(() => {
-            try {
-              releaseDecoder();
-            } catch {
-              // The decode result already carries any primary Wasm failure.
-            }
-          }),
+        // Both resources live until the output stream ends. Finalizers run in
+        // reverse order: the libFLAC decoder is deleted, then the Asyncify
+        // stack is freed.
+        const abi = yield* acquireDecoderAbi(service.module).pipe(
+          Scope.provide(resourceScope),
         );
-
-        const expectedFrames = options.expectedFrames ?? 0n;
-        const expectedFormat = options.expectedFormat;
-        decoder = yield* abiOperation(
-          "instantiate",
-          "decoder Wasm trapped while allocating libFLAC state",
-          () =>
-            abi.exports.codec_decoder_new(
-              options.maxMetadataBytes,
-              expectedFormat?.sampleRate ?? 0,
-              expectedFormat?.channels ?? 0,
-              expectedFormat?.bitsPerSample ?? 0,
-              low32(expectedFrames),
-              high32(expectedFrames),
-              expectedFormat === undefined ? 0 : 1,
-              options.expectedFrames === undefined ? 0 : 1,
-            ),
-        );
-        if (
-          !Number.isSafeInteger(decoder) ||
-          decoder <= 0 ||
-          decoder >= abi.exports.memory.buffer.byteLength
-        ) {
-          return yield* new FlacDecodeError({
-            reason: "allocation-failed",
-            phase: "instantiate",
-            detail: "could not allocate the fixed-memory libFLAC decoder",
-          });
-        }
+        const resource = yield* Effect.acquireRelease(
+          createDecoder(abi, options),
+          (owned) => Effect.ignore(deleteDecoder(owned)),
+        ).pipe(Scope.provide(resourceScope));
+        const { decoder } = resource;
 
         let state: "metadata" | "frames" | "done" = "metadata";
         let format: PcmFormat | undefined;
@@ -333,7 +369,7 @@ const makeDecodeStream = <E, R>(
             );
             if (result !== 0) {
               return yield* decoderFailure(
-                { abi, decoder },
+                resource,
                 "metadata",
                 "libFLAC rejected FLAC metadata",
                 result,
@@ -511,7 +547,7 @@ const makeDecodeStream = <E, R>(
             }
             if (result !== 2) {
               return yield* decoderFailure(
-                { abi, decoder },
+                resource,
                 "frame",
                 "libFLAC rejected an audio frame",
                 result,
@@ -525,7 +561,7 @@ const makeDecodeStream = <E, R>(
             );
             if (finish !== 0) {
               return yield* decoderFailure(
-                { abi, decoder },
+                resource,
                 "finish",
                 "libFLAC could not verify the completed stream",
                 finish,
@@ -564,11 +600,7 @@ const makeDecodeStream = <E, R>(
               md5Checked: md5Present,
               md5Verified: md5Present,
             };
-            yield* abiOperation(
-              "finish",
-              "decoder cleanup trapped after successful verification",
-              releaseDecoder,
-            );
+            yield* releaseDecoder(resource);
             state = "done";
             return [complete] as readonly [FlacDecodeEvent];
           }
