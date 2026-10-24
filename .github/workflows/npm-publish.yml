@@ -1,6 +1,8 @@
 name: npm publish
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       mode:
@@ -32,7 +34,103 @@ env:
   PINNED_NPM_VERSION: "11.19.1"
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      proceed: ${{ steps.plan.outputs.proceed }}
+      mode: ${{ steps.plan.outputs.mode }}
+      expected_sha: ${{ steps.plan.outputs.expected_sha }}
+      expected_version: ${{ steps.plan.outputs.expected_version }}
+    steps:
+      - name: Read the pushed package manifest
+        if: github.event_name == 'push'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+      - name: Plan a dispatched release or an absent pushed version
+        id: plan
+        env:
+          DISPATCH_MODE: ${{ inputs.mode }}
+          DISPATCH_SHA: ${{ inputs.expected_sha }}
+          DISPATCH_VERSION: ${{ inputs.expected_version }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFile, readFile } from "node:fs/promises";
+          const emit = async (plan) => {
+            for (const value of Object.values(plan)) {
+              if (/[\r\n]/.test(value)) throw new Error("release plan value contains a newline");
+            }
+            await appendFile(
+              process.env.GITHUB_OUTPUT,
+              Object.entries(plan).map(([key, value]) => `${key}=${value}\n`).join(""),
+            );
+          };
+          if (process.env.EVENT_NAME === "workflow_dispatch") {
+            await emit({
+              proceed: "true",
+              mode: process.env.DISPATCH_MODE,
+              expected_sha: process.env.DISPATCH_SHA,
+              expected_version: process.env.DISPATCH_VERSION,
+            });
+          } else if (process.env.EVENT_NAME === "push") {
+            if (process.env.GITHUB_REF !== "refs/heads/main") {
+              throw new Error("automatic publication only runs for main");
+            }
+            const manifest = JSON.parse(await readFile("package.json", "utf8"));
+            if (manifest.name !== process.env.EXPECTED_PACKAGE) {
+              throw new Error(`unexpected package name ${JSON.stringify(manifest.name)}`);
+            }
+            const version = manifest.version;
+            // npm refuses a prerelease without --tag, which this workflow never passes.
+            if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
+              throw new Error(
+                `automatic publication needs a plain release version, not ${JSON.stringify(version)}`,
+              );
+            }
+            const url = `https://registry.npmjs.org/${encodeURIComponent(process.env.EXPECTED_PACKAGE)}/${encodeURIComponent(version)}`;
+            let response;
+            try {
+              response = await fetch(url, { headers: { accept: "application/json" } });
+            } catch (error) {
+              throw new Error("npm registry version lookup failed", { cause: error });
+            }
+            if (response.status === 404) {
+              process.stdout.write(`${version} is absent; qualifying it for publication.\n`);
+              await emit({
+                proceed: "true",
+                mode: "publish",
+                expected_sha: process.env.PUSH_SHA,
+                expected_version: version,
+              });
+            } else if (!response.ok) {
+              throw new Error(`npm registry version lookup returned HTTP ${response.status}`);
+            } else {
+              const metadata = await response.json();
+              if (
+                metadata.name !== process.env.EXPECTED_PACKAGE ||
+                metadata.version !== version
+              ) {
+                throw new Error("registry returned an unexpected version document");
+              }
+              process.stdout.write(`${version} is already published; nothing to release.\n`);
+              await emit({ proceed: "false", mode: "none", expected_sha: "", expected_version: "" });
+            }
+          } else {
+            throw new Error(`unsupported event ${process.env.EVENT_NAME}`);
+          }
+          NODE
+
   qualify:
+    needs: plan
+    if: needs.plan.outputs.proceed == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -43,26 +141,26 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.expected_sha }}
+          ref: ${{ needs.plan.outputs.expected_sha }}
           persist-credentials: false
       - name: Admit the exact main package
         env:
-          DISPATCH_SHA: ${{ inputs.expected_sha }}
-          DISPATCH_VERSION: ${{ inputs.expected_version }}
+          RELEASE_SHA: ${{ needs.plan.outputs.expected_sha }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.expected_version }}
         run: |
           set -euo pipefail
-          [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_SHA" = "$DISPATCH_SHA"
-          test "$(git rev-parse HEAD)" = "$DISPATCH_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           main_sha=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
-          test "$main_sha" = "$DISPATCH_SHA"
+          test "$main_sha" = "$RELEASE_SHA"
           node --input-type=module <<'NODE'
           import { readFile } from "node:fs/promises";
           const manifest = JSON.parse(await readFile("package.json", "utf8"));
           const expected = {
             name: process.env.EXPECTED_PACKAGE,
-            version: process.env.DISPATCH_VERSION,
+            version: process.env.RELEASE_VERSION,
             repository: process.env.EXPECTED_REPOSITORY,
           };
           if (
@@ -156,7 +254,8 @@ jobs:
           retention-days: 1
 
   publish-or-compare:
-    needs: qualify
+    needs: [plan, qualify]
+    if: needs.plan.outputs.proceed == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -187,7 +286,7 @@ jobs:
       - name: Revalidate the immutable qualified artifact
         env:
           ARTIFACT_DIRECTORY: ${{ runner.temp }}/qualified-npm-package
-          DISPATCH_VERSION: ${{ inputs.expected_version }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.expected_version }}
           EXPECTED_FILENAME: ${{ needs.qualify.outputs.tarball_filename }}
           EXPECTED_INTEGRITY: ${{ needs.qualify.outputs.tarball_integrity }}
           EXPECTED_SHA256: ${{ needs.qualify.outputs.tarball_sha256 }}
@@ -232,7 +331,7 @@ jobs:
           const manifest = JSON.parse(packedJson.stdout);
           if (
             manifest.name !== process.env.EXPECTED_PACKAGE ||
-            manifest.version !== process.env.DISPATCH_VERSION ||
+            manifest.version !== process.env.RELEASE_VERSION ||
             manifest.repository?.type !== "git" ||
             manifest.repository?.url !== process.env.EXPECTED_REPOSITORY
           ) {
@@ -241,12 +340,12 @@ jobs:
           NODE
       - name: Check registry version admission
         env:
-          DISPATCH_MODE: ${{ inputs.mode }}
-          DISPATCH_VERSION: ${{ inputs.expected_version }}
+          RELEASE_MODE: ${{ needs.plan.outputs.mode }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.expected_version }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          const url = `https://registry.npmjs.org/${encodeURIComponent(process.env.EXPECTED_PACKAGE)}/${encodeURIComponent(process.env.DISPATCH_VERSION)}`;
+          const url = `https://registry.npmjs.org/${encodeURIComponent(process.env.EXPECTED_PACKAGE)}/${encodeURIComponent(process.env.RELEASE_VERSION)}`;
           let response;
           try {
             response = await fetch(url, { headers: { accept: "application/json" } });
@@ -254,19 +353,19 @@ jobs:
             throw new Error(`npm registry version lookup failed`, { cause: error });
           }
           if (response.status === 404) {
-            if (process.env.DISPATCH_MODE === "verify") {
+            if (process.env.RELEASE_MODE === "verify") {
               throw new Error("verify mode requires the exact registry version to exist");
             }
             process.stdout.write("Exact version is absent; publication is admitted.\n");
           } else if (!response.ok) {
             throw new Error(`npm registry version lookup returned HTTP ${response.status}`);
-          } else if (process.env.DISPATCH_MODE === "publish") {
+          } else if (process.env.RELEASE_MODE === "publish") {
             throw new Error("publish mode requires the exact registry version to be absent");
           } else {
             const metadata = await response.json();
             if (
               metadata.name !== process.env.EXPECTED_PACKAGE ||
-              metadata.version !== process.env.DISPATCH_VERSION
+              metadata.version !== process.env.RELEASE_VERSION
             ) {
               throw new Error("registry returned an unexpected version document");
             }
@@ -274,14 +373,14 @@ jobs:
           }
           NODE
       - name: Publish the exact qualified tarball through OIDC
-        if: inputs.mode == 'publish'
+        if: needs.plan.outputs.mode == 'publish'
         env:
           TARBALL: ${{ runner.temp }}/qualified-npm-package/${{ needs.qualify.outputs.tarball_filename }}
         run: npm publish "$TARBALL" --access public --ignore-scripts --provenance
       - name: Compare the registry tarball with qualification
         env:
-          DISPATCH_MODE: ${{ inputs.mode }}
-          DISPATCH_VERSION: ${{ inputs.expected_version }}
+          RELEASE_MODE: ${{ needs.plan.outputs.mode }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.expected_version }}
           EXPECTED_INTEGRITY: ${{ needs.qualify.outputs.tarball_integrity }}
           EXPECTED_SHA256: ${{ needs.qualify.outputs.tarball_sha256 }}
           REGISTRY_TARBALL: ${{ runner.temp }}/registry-package.tgz
@@ -290,9 +389,9 @@ jobs:
           node --input-type=module <<'NODE'
           import { createHash } from "node:crypto";
           import { writeFile } from "node:fs/promises";
-          const versionUrl = `https://registry.npmjs.org/${encodeURIComponent(process.env.EXPECTED_PACKAGE)}/${encodeURIComponent(process.env.DISPATCH_VERSION)}`;
+          const versionUrl = `https://registry.npmjs.org/${encodeURIComponent(process.env.EXPECTED_PACKAGE)}/${encodeURIComponent(process.env.RELEASE_VERSION)}`;
           let metadata;
-          for (let attempt = 1; attempt <= 24; attempt++) {
+          for (let attempt = 1; attempt <= 120; attempt++) {
             let response;
             try {
               response = await fetch(versionUrl, {
@@ -307,17 +406,17 @@ jobs:
               metadata = await response.json();
               break;
             }
-            if (response.status !== 404 || process.env.DISPATCH_MODE !== "publish") {
+            if (response.status !== 404 || process.env.RELEASE_MODE !== "publish") {
               throw new Error(
                 `npm registry convergence lookup returned HTTP ${response.status}`,
               );
             }
             await new Promise((resolve) => setTimeout(resolve, 5000));
           }
-          if (!metadata) throw new Error("published version did not converge in two minutes");
+          if (!metadata) throw new Error("published version did not converge in ten minutes");
           if (
             metadata.name !== process.env.EXPECTED_PACKAGE ||
-            metadata.version !== process.env.DISPATCH_VERSION ||
+            metadata.version !== process.env.RELEASE_VERSION ||
             metadata.repository?.type !== "git" ||
             metadata.repository?.url !== process.env.EXPECTED_REPOSITORY ||
             metadata.dist?.integrity !== process.env.EXPECTED_INTEGRITY
@@ -351,7 +450,8 @@ jobs:
           NODE
 
   registry-consumer:
-    needs: [qualify, publish-or-compare]
+    needs: [plan, qualify, publish-or-compare]
+    if: needs.plan.outputs.proceed == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -362,7 +462,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.expected_sha }}
+          ref: ${{ needs.plan.outputs.expected_sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -387,23 +487,23 @@ jobs:
         env:
           CODEC_PACK_EXPECTED_SHA256: ${{ needs.qualify.outputs.tarball_sha256 }}
           CODEC_PACK_RECEIPT: ${{ runner.temp }}/registry-pack-receipt.json
-          CODEC_PACK_SOURCE: ${{ env.EXPECTED_PACKAGE }}@${{ inputs.expected_version }}
+          CODEC_PACK_SOURCE: ${{ env.EXPECTED_PACKAGE }}@${{ needs.plan.outputs.expected_version }}
         run: bun run pack:check
       - name: Verify registry signatures and conditional provenance
         env:
-          DISPATCH_MODE: ${{ inputs.mode }}
-          DISPATCH_VERSION: ${{ inputs.expected_version }}
+          RELEASE_MODE: ${{ needs.plan.outputs.mode }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.expected_version }}
         run: |
           set -euo pipefail
           audit_directory="$RUNNER_TEMP/codec-signature-audit"
           mkdir "$audit_directory"
           cd "$audit_directory"
           npm init --yes >/dev/null
-          npm install --ignore-scripts --save-exact "$EXPECTED_PACKAGE@$DISPATCH_VERSION" >/dev/null
+          npm install --ignore-scripts --save-exact "$EXPECTED_PACKAGE@$RELEASE_VERSION" >/dev/null
           npm audit signatures --json --include-attestations > audit-signatures.json
           node --input-type=module <<'NODE'
           import { readFile } from "node:fs/promises";
-          if (process.env.DISPATCH_MODE !== "publish") {
+          if (process.env.RELEASE_MODE !== "publish") {
             process.stdout.write(
               "Verify mode was read-only and does not claim an OIDC publication.\n",
             );
@@ -415,7 +515,7 @@ jobs:
           const target = report.verified?.find(
             ({ name, version }) =>
               name === process.env.EXPECTED_PACKAGE &&
-              version === process.env.DISPATCH_VERSION,
+              version === process.env.RELEASE_VERSION,
           );
           if (
             target?.attestations?.provenance?.predicateType !==

@@ -9,15 +9,29 @@ with npm 11.19.1. Keep the public package name and repository URL unchanged.
 1. Update `package.json` and `bun.lock` for a new version, review the change, and
    merge only after the ordinary, native, Wasm rebuild, and packed-consumer gates
    pass. Never reuse a published version.
-2. Record the full lowercase main commit SHA and exact package version.
-3. Run the **npm-publish.yml** workflow on `main` with `mode=publish`,
-   `expected_sha=<40-character commit>`, and `expected_version=<version>`.
-4. Verify the registry result and create the matching GitHub release/tag at the
-   reviewed commit. Record the run URL and registry integrity in the issue spec.
+2. Merging to `main` starts **npm-publish.yml**. Its planning job reads the
+   package name and version at the pushed commit and looks up that exact version
+   in the registry. An existing version ends the run successfully without
+   qualifying or publishing; `CI` still checks every push. An absent version
+   proceeds as `mode=publish` with the pushed commit and version. Any other
+   registry response fails the run without publishing.
+3. Verify the registry result and create the matching GitHub release/tag at the
+   published commit. Record the run URL and registry integrity in the issue spec.
 
-The workflow has three jobs. Qualification builds and verifies the package
-without an OIDC permission, preserving the tarball only after every consumer
-passes. The publishing job receives that artifact, verifies its digest and
+Qualification still admits only the exact current main head. If another commit
+lands on `main` before qualification starts, the automatic run fails safely;
+the newer push plans its own run. Runs share one non-cancelling concurrency
+group, so a release in progress is never interrupted, although GitHub replaces
+an older queued run with a newer one.
+
+A manual dispatch remains available on `main` with `mode=publish` or
+`mode=verify`, `expected_sha=<40-character current main commit>`, and
+`expected_version=<version>`. Use it to retry a failed automatic publication or
+to verify an existing release.
+
+After planning, the workflow has three jobs. Qualification builds and verifies
+the package without an OIDC permission, preserving the tarball only after every
+consumer passes. The publishing job receives that artifact, verifies its digest and
 identity, and publishes it without running repository code or lifecycle scripts.
 It alone receives `id-token: write`; it has no npm write-token fallback. The
 registry job downloads the published package and repeats the consumer matrix
@@ -50,6 +64,10 @@ npm exec --yes --package npm@11.19.1 -- npm trust list @misofm/codec
 Use interactive text output for trust commands: JSON output can buffer the
 browser authentication link while the command waits. npm may require a separate
 authentication for the read-back command as well as the settings change.
+
+Automatic publication on push keeps this binding: the publishing workflow file
+is still `npm-publish.yml`, so the trusted publisher needs no change. The
+workflow declares no GitHub environment; keep the publisher's environment empty.
 
 This does not install or replace the local global npm client. GitHub-hosted
 publishing uses short-lived OIDC credentials, and npm generates provenance for
