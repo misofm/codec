@@ -54,3 +54,20 @@ no LPC subframe above order 1. The fixed encoder produced 97,621 bytes
 (+1.389653%) and 64 higher-order LPC subframes on the same fixture, proving that
 both regression assertions reject the original missing-math-table build. The
 superseded asset is not retained in this repository.
+
+## Scheduler throughput
+
+`scripts/throughput.mjs` encodes and then decodes a synthetic 4-minute,
+48 kHz, 24-bit stereo signal held in memory: 2,813 blocks of 4,096 frames, with
+64 KiB decoder fragments. It runs on Node, Bun, and Chromium, Firefox, and
+WebKit workers through the cached Playwright browsers. Each receipt counts
+scheduler dispatches and the longest interval between them. With no I/O in the
+workload, every yield to the event loop appears in those counts.
+
+```sh
+node scripts/throughput.mjs default,message 3 node,bun,chromium,firefox,webkit
+```
+
+`default` reproduces Effect's own scheduler dispatch (`setImmediate`, or
+`setTimeout(0)` in browsers). `message` dispatches through a `MessageChannel`.
+`test/scheduling.test.ts` fails if the encoder or decoder yields once per block.

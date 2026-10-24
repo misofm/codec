@@ -1,3 +1,4 @@
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -51,6 +52,13 @@ interface CheckedEncodeOptions {
   readonly format: PcmFormat;
   readonly expectedFrames: bigint | undefined;
 }
+
+// Hand control back to the caller's Effect scheduler at least this often while
+// encoding. The fiber runtime also yields after its own operation budget
+// (`Scheduler.MaxOpsBeforeYield`). Yielding after every block instead cost one
+// scheduler dispatch per 4,096 frames, which browsers clamp to at least 4 ms
+// (setTimeout), so a 4-minute stereo track spent seconds idle in a worker.
+const ENCODE_TIME_SLICE_NANOS = 100_000_000n;
 
 const readUint16 = (bytes: Uint8Array, offset: number): number =>
   ((bytes[offset] ?? 0) << 8) | (bytes[offset + 1] ?? 0);
@@ -392,8 +400,11 @@ const releaseEncoder = (
  *
  * The Effect is lazy. It awaits every staged random-access write before pulling
  * another PCM block. Synchronous Wasm calls are bounded but cannot be interrupted
- * mid-call; interruption is observed before the next call/pull/write. A failed or
- * interrupted operation may leave partial sink bytes, and the caller owns cleanup.
+ * mid-call. Interruption, timers, and other fibers are serviced whenever the fiber
+ * yields: at asynchronous source/sink waits, after the runtime's operation budget
+ * (`Scheduler.MaxOpsBeforeYield`), and at least once per 100 ms of encoding. A
+ * failed or interrupted operation may leave partial sink bytes, and the caller
+ * owns cleanup.
  */
 export const encodeFlac = <EI, RI, EO, RO>(
   source: Stream.Stream<Int32Array, EI, RI>,
@@ -565,6 +576,7 @@ export const encodeFlac = <EI, RI, EO, RO>(
 
       let frames = 0n;
       let blockIndex = 0;
+      let sliceStart = yield* Clock.monotonicTimeNanos;
       yield* Stream.runForEach(source, (block) =>
         Effect.gen(function* () {
           const blockFrames = yield* validateBlock(
@@ -618,7 +630,11 @@ export const encodeFlac = <EI, RI, EO, RO>(
           yield* drainWrites(batch.writes);
           frames += BigInt(blockFrames);
           blockIndex += 1;
-          yield* Effect.yieldNow;
+          const now = yield* Clock.monotonicTimeNanos;
+          if (now - sliceStart >= ENCODE_TIME_SLICE_NANOS) {
+            yield* Effect.yieldNow;
+            sliceStart = yield* Clock.monotonicTimeNanos;
+          }
         }),
       );
 

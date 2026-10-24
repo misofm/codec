@@ -122,6 +122,24 @@ and cannot be interrupted in the middle of a call; cancellation is observed
 between bounded calls and during Effect input/output waits. Run heavy jobs in
 application-owned workers when event-loop responsiveness matters.
 
+### Scheduling
+
+The codec does not install a scheduler. With fully synchronous input and output
+(an in-memory source and sink), the fiber hands control to your Effect scheduler
+only when the runtime's operation budget (`Scheduler.MaxOpsBeforeYield`, 2,048 by
+default) is spent. The encoder also yields at least once per 100 ms of encoding.
+Interruption, timers, and other fibers on the same thread wait for the next
+handoff. On a desktop CPU in 0.2.1 this measured at most about 120 ms for
+encoding and 45 ms for decoding.
+
+Up to 0.2.0 the encoder yielded after every 4,096-frame block. In browsers,
+Effect's default scheduler yields with `setTimeout(0)`, which is clamped to at
+least 4 ms. A 4-minute stereo track therefore spent about 11 seconds idle, and
+encoding in a Chromium worker took four times as long as in Node. To hand off more
+often on a UI thread, lower `Scheduler.MaxOpsBeforeYield`. In browsers you can also
+provide a `MessageChannel`-based `Scheduler.MixedScheduler`, which avoids the
+timer clamp.
+
 Partial output may remain after failure or interruption. Callers own staging,
 rollback, cleanup, durable commits, and retry policy. The package does not retry
 mutations or publish output. Applications also bound concurrent codec operations
