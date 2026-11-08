@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = await mkdtemp(join(tmpdir(), "misofm-codec-packed-"));
-const peers = ["4.0.3", "4.0.4"];
+const peers = ["4.0.3", "4.0.4", "4.1.1", "4.1.2"];
 const receipts = [];
 const packSource = process.env.CODEC_PACK_SOURCE;
 const expectedSha256 = process.env.CODEC_PACK_EXPECTED_SHA256;

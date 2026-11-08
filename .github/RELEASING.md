@@ -104,5 +104,5 @@ The existing consumer script accepts these optional environment variables:
 
 A registry check uses `CODEC_PACK_SOURCE=@misofm/codec@<version>` and the expected
 hash from the release qualification. It checks the actual registry tarball in
-isolated installations across Effect 4.0.3/4.0.4, Bun, Node, Chromium, Firefox,
+isolated installations across Effect 4.0.3/4.0.4/4.1.1/4.1.2, Bun, Node, Chromium, Firefox,
 and WebKit. Keep receipts in the issue evidence; do not commit the tarball.
