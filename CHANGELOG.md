@@ -2,6 +2,23 @@
 
 All notable changes to `@misofm/codec`, newest first.
 
+## 0.2.2
+
+Effect 4.1 is supported. The peer range widens from `>=4.0.3 <4.1` to
+`>=4.0.3 <4.2`, so an application can move to Effect 4.1 (which
+`@unconfirmed/sui-effect` 0.6 needs) without dropping the codec. Nothing else
+changes: the public API, Wasm assets and encoded bytes are those of 0.2.1, and
+`dist/` compiled against Effect 4.1.2 is byte-identical to the 4.0.4 build.
+
+- **Peer `effect` is now `>=4.0.3 <4.2`.** Effect 4.0.3 and later 4.0.x keep
+  working.
+- Development pins Effect 4.1.2. The packed-consumer matrix runs Effect 4.0.3,
+  4.0.4, 4.1.1 and 4.1.2 on Bun, Node, and Chromium, Firefox and WebKit workers.
+- The scheduling test (no per-block yields) passes on 4.1.2, and
+  `scripts/throughput.mjs` on Node and Bun measures the same encode time and
+  scheduler dispatches as on 4.0.4 (about 4.2 s and 41 dispatches for a
+  4-minute 24-bit stereo track on Node).
+
 ## 0.2.1
 
 Encoding in browsers is about four times faster. The public API, declarations,
